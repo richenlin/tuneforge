@@ -519,8 +519,13 @@ mod tests {
     #[test]
     fn empty_input_is_rejected() {
         let (_root, out) = out_dir();
-        let err = plan_convert(vec![], &ConvertConfig::default(), &out, ConflictPolicy::Skip)
-            .unwrap_err();
+        let err = plan_convert(
+            vec![],
+            &ConvertConfig::default(),
+            &out,
+            ConflictPolicy::Skip,
+        )
+        .unwrap_err();
         assert_eq!(err.category(), tf_core::ErrorCategory::Input);
     }
 

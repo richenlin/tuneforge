@@ -240,9 +240,8 @@ impl JobReport {
 
     /// 导出 CSV（含表头，RFC4180 转义）。
     pub fn to_csv(&self) -> String {
-        let mut out = String::from(
-            "status,kind,input,output,error_category,error,note,bytes,elapsed_ms\n",
-        );
+        let mut out =
+            String::from("status,kind,input,output,error_category,error,note,bytes,elapsed_ms\n");
         for r in &self.results {
             let row = [
                 r.status.label().to_string(),
@@ -293,10 +292,19 @@ mod tests {
         let report = JobReport {
             output_dir: PathBuf::from("C:/out"),
             results: vec![
-                JobResult::success(&j, PathBuf::from("C:/out/a.flac"), 1024, Duration::from_millis(50))
-                    .with_note(Some("已限幅 -3.0 dB".into())),
+                JobResult::success(
+                    &j,
+                    PathBuf::from("C:/out/a.flac"),
+                    1024,
+                    Duration::from_millis(50),
+                )
+                .with_note(Some("已限幅 -3.0 dB".into())),
                 JobResult::skipped(&j, "已存在".into()),
-                JobResult::failed(&j, &TfError::Decode("boom".into()), Duration::from_millis(10)),
+                JobResult::failed(
+                    &j,
+                    &TfError::Decode("boom".into()),
+                    Duration::from_millis(10),
+                ),
                 JobResult::cancelled(&j),
             ],
             elapsed_ms: 1234,
@@ -317,7 +325,12 @@ mod tests {
     #[test]
     fn csv_is_escaped_and_has_header() {
         let j = job(JobKind::Tags, "C:/in/a, b.flac");
-        let mut result = JobResult::success(&j, PathBuf::from("C:/out/a.flac"), 1, Duration::from_millis(1));
+        let mut result = JobResult::success(
+            &j,
+            PathBuf::from("C:/out/a.flac"),
+            1,
+            Duration::from_millis(1),
+        );
         result.note = Some("含 \"引号\" 与,逗号".into());
         let report = JobReport {
             output_dir: PathBuf::from("C:/out"),

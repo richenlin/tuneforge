@@ -4,9 +4,9 @@ use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 #[cfg(test)]
 use std::time::Duration;
+use std::time::Instant;
 
 use serde::Serialize;
 use tf_core::error::{Result, TfError};
@@ -16,12 +16,37 @@ use crate::pipeline::Pipeline;
 use crate::plan::{Job, JobPlan};
 use crate::report::{JobReport, JobResult, TaskStatus};
 
-/// 默认并发度：`min(CPU 核心数, 4)`（FFmpeg 自身也可能多线程，避免过载）。
-pub fn default_concurrency() -> usize {
+/// 默认并发度上限（内存 / 文件句柄 / 磁盘抖动都要留余地）。
+///
+/// 音频编码器（libmp3lame、flac、alac…）基本都是单线程的，所以并发跑多个文件
+/// 比让单个 ffmpeg 多线程更有效；实测 16 线程机器上 16 个并行仍比 8 个快 ~30%。
+/// 上限取 16：再多收益递减，而且 DSP 路径的内存占用由 `MemoryGate` 另外看管。
+pub const MAX_DEFAULT_CONCURRENCY: usize = 16;
+
+/// 环境变量：手动指定并发度（`TUNEFORGE_CONCURRENCY`，0 或非法值用默认）。
+///
+/// 给用户 / 压测留一个开关：低配机器可以调小，快速 SSD + 多核可以调大（上限仍受限）。
+pub const CONCURRENCY_ENV: &str = "TUNEFORGE_CONCURRENCY";
+
+/// 可见的 CPU 核心数。
+pub fn cpu_cores() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1)
-        .clamp(1, 4)
+}
+
+/// 默认并发度：`min(CPU 核心数, MAX_DEFAULT_CONCURRENCY)`，可被 `TUNEFORGE_CONCURRENCY` 覆盖。
+///
+/// 以前是硬编码 `min(核心数, 4)`，在 8/12/16 核机器上会让一半以上的核心闲着。
+pub fn default_concurrency() -> usize {
+    if let Some(n) = std::env::var(CONCURRENCY_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|n| *n > 0)
+    {
+        return n.clamp(1, 64);
+    }
+    cpu_cores().clamp(1, MAX_DEFAULT_CONCURRENCY)
 }
 
 /// 取消令牌（可克隆，跨线程共享）。
@@ -84,7 +109,11 @@ impl LogLevel {
 
 /// 队列事件（UI 通过 Tauri 事件推送）。
 #[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(tag = "event", rename_all = "snake_case", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "event",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum QueueEvent {
     /// 任务开始。
     Started {
@@ -152,7 +181,10 @@ impl CollectingSink {
 
     /// 取出全部事件快照。
     pub fn events(&self) -> Vec<QueueEvent> {
-        self.events.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.events
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// 已结束的任务数。
@@ -359,6 +391,17 @@ impl QueueRunner {
         self.concurrency
     }
 
+    /// 单个 ffmpeg 子进程可用的线程数：`max(1, 核心数 / 并发度)`。
+    ///
+    /// 并发度等于核心数时返回 `Some(1)`：音频编解码大多是单线程，与其让每个进程
+    /// 都开满线程互相抢，不如让 `并发度` 个文件真正并行。核心数多于并发度时
+    /// （例如 16 核 + 默认上限 8），把多出来的核心分给每个子进程。
+    pub fn child_thread_budget(&self) -> Option<usize> {
+        let cores = cpu_cores();
+        let workers = self.concurrency.max(1);
+        Some((cores / workers).max(1))
+    }
+
     /// 执行任务清单。
     ///
     /// * 输出目录会先做非破坏性校验。
@@ -446,7 +489,9 @@ fn same_path(a: &Path, b: &Path) -> bool {
     match (parent(a), parent(b), name(a), name(b)) {
         (Some(dir_a), Some(dir_b), Some(name_a), Some(name_b)) => {
             let same_dir = if cfg!(windows) {
-                dir_a.to_string_lossy().eq_ignore_ascii_case(&dir_b.to_string_lossy())
+                dir_a
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(&dir_b.to_string_lossy())
             } else {
                 dir_a == dir_b
             };
@@ -560,11 +605,11 @@ pub fn has_failures(report: &JobReport) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pipeline::ProduceReport;
     use crate::plan::{
         plan_convert, plan_rename, ChannelMode, ConvertConfig, ConvertSource, JobPayload,
         RenameEntry,
     };
-    use crate::pipeline::ProduceReport;
     use std::path::PathBuf;
     use std::sync::atomic::AtomicUsize;
 
@@ -602,12 +647,7 @@ mod tests {
     }
 
     impl Pipeline for MockPipeline {
-        fn produce(
-            &self,
-            job: &Job,
-            target: &Path,
-            ctx: &JobContext<'_>,
-        ) -> Result<ProduceReport> {
+        fn produce(&self, job: &Job, target: &Path, ctx: &JobContext<'_>) -> Result<ProduceReport> {
             self.called.fetch_add(1, Ordering::SeqCst);
             let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
             self.peak.fetch_max(active, Ordering::SeqCst);
@@ -615,7 +655,10 @@ mod tests {
                 sleep_ms(self.delay_ms);
             }
             let result = if self.fail_on.as_deref() == Some(job.output_name.as_str()) {
-                Err(TfError::Decode(format!("模拟解码失败：{}", job.input_name())))
+                Err(TfError::Decode(format!(
+                    "模拟解码失败：{}",
+                    job.input_name()
+                )))
             } else {
                 ctx.reporter.progress(0.5, "处理中");
                 std::fs::write(target, vec![b'x'; self.payload_bytes])
@@ -734,12 +777,7 @@ mod tests {
         let pipeline = Arc::new(MockPipeline::new(8, 25));
         let pipeline_ref: &MockPipeline = &pipeline;
         let report = QueueRunner::new(3)
-            .run(
-                &plan,
-                pipeline_ref,
-                Arc::new(NullSink),
-                CancelToken::new(),
-            )
+            .run(&plan, pipeline_ref, Arc::new(NullSink), CancelToken::new())
             .unwrap();
         assert_eq!(report.summary().success, 6);
         assert!(pipeline.peak.load(Ordering::SeqCst) <= 3, "并发未受限");
@@ -803,7 +841,10 @@ mod tests {
         assert_eq!(summary.failed, 1);
         assert_eq!(summary.success, 1);
         let failure = report.failures()[0];
-        assert_eq!(failure.error_category, Some(tf_core::error::ErrorCategory::Decode));
+        assert_eq!(
+            failure.error_category,
+            Some(tf_core::error::ErrorCategory::Decode)
+        );
         assert!(failure.error.as_deref().unwrap().contains("模拟解码失败"));
         assert_eq!(temp_files(&setup.out_dir).len(), 0);
     }
@@ -826,7 +867,10 @@ mod tests {
             .unwrap();
         assert_eq!(report.summary().skipped, 1);
         assert_eq!(pipeline.calls(), 0);
-        assert_eq!(std::fs::read(setup.out_dir.join("track0.flac")).unwrap(), b"existing");
+        assert_eq!(
+            std::fs::read(setup.out_dir.join("track0.flac")).unwrap(),
+            b"existing"
+        );
     }
 
     #[test]
@@ -842,10 +886,20 @@ mod tests {
         )
         .unwrap();
         let report = QueueRunner::new(1)
-            .run(&plan, &MockPipeline::new(16, 0), Arc::new(NullSink), CancelToken::new())
+            .run(
+                &plan,
+                &MockPipeline::new(16, 0),
+                Arc::new(NullSink),
+                CancelToken::new(),
+            )
             .unwrap();
         assert_eq!(report.summary().success, 1);
-        assert_eq!(std::fs::read(setup.out_dir.join("track0.flac")).unwrap().len(), 16);
+        assert_eq!(
+            std::fs::read(setup.out_dir.join("track0.flac"))
+                .unwrap()
+                .len(),
+            16
+        );
     }
 
     #[test]
@@ -863,10 +917,14 @@ mod tests {
         .unwrap();
         struct CopyPipeline;
         impl Pipeline for CopyPipeline {
-            fn produce(&self, job: &Job, target: &Path, _ctx: &JobContext<'_>) -> Result<ProduceReport> {
+            fn produce(
+                &self,
+                job: &Job,
+                target: &Path,
+                _ctx: &JobContext<'_>,
+            ) -> Result<ProduceReport> {
                 assert!(matches!(job.payload, JobPayload::Rename));
-                std::fs::copy(&job.input, target)
-                    .map_err(|e| TfError::Io(e.to_string()))?;
+                std::fs::copy(&job.input, target).map_err(|e| TfError::Io(e.to_string()))?;
                 Ok(ProduceReport::default())
             }
         }
@@ -903,7 +961,12 @@ mod tests {
         )
         .unwrap();
         assert!(QueueRunner::new(1)
-            .run(&good, &MockPipeline::new(1, 0), Arc::new(NullSink), CancelToken::new())
+            .run(
+                &good,
+                &MockPipeline::new(1, 0),
+                Arc::new(NullSink),
+                CancelToken::new()
+            )
             .is_ok());
     }
 
@@ -916,7 +979,12 @@ mod tests {
             jobs: Vec::new(),
         };
         let report = QueueRunner::new(2)
-            .run(&plan, &MockPipeline::new(1, 0), Arc::new(NullSink), CancelToken::new())
+            .run(
+                &plan,
+                &MockPipeline::new(1, 0),
+                Arc::new(NullSink),
+                CancelToken::new(),
+            )
             .unwrap();
         assert_eq!(report.summary().total, 0);
         assert_eq!(report.concurrency, 0);
@@ -929,17 +997,41 @@ mod tests {
         assert!(token.check().is_ok());
         token.cancel();
         assert!(token.is_cancelled());
-        assert_eq!(token.check().unwrap_err().category(), tf_core::error::ErrorCategory::Cancelled);
+        assert_eq!(
+            token.check().unwrap_err().category(),
+            tf_core::error::ErrorCategory::Cancelled
+        );
         let cloned = token.clone();
         assert!(cloned.is_cancelled());
     }
 
     #[test]
-    fn default_concurrency_is_capped_at_four() {
+    fn default_concurrency_follows_core_count_with_upper_bound() {
         let n = default_concurrency();
-        assert!((1..=4).contains(&n));
+        assert!(
+            (1..=MAX_DEFAULT_CONCURRENCY).contains(&n),
+            "默认并发度应在 1..={MAX_DEFAULT_CONCURRENCY} 内，实际 {n}"
+        );
         assert_eq!(QueueRunner::new(0).concurrency(), n);
         assert_eq!(QueueRunner::new(7).concurrency(), 7);
         assert_eq!(JobPayload::Rename, JobPayload::Rename);
+    }
+
+    #[test]
+    fn child_thread_budget_keeps_total_threads_near_core_count() {
+        let cores = cpu_cores();
+        for workers in 1..=cores.max(1) {
+            let budget = QueueRunner::new(workers).child_thread_budget().unwrap();
+            assert!(budget >= 1, "每个子进程至少 1 个线程");
+            assert!(
+                workers * budget <= cores.max(1),
+                "并发 {workers} × 线程 {budget} 不应超过核心数 {cores}"
+            );
+        }
+        // 并发度 == 核心数时，单个子进程只拿 1 个线程（音频编解码基本都是单线程）。
+        assert_eq!(
+            QueueRunner::new(cores.max(1)).child_thread_budget(),
+            Some(1)
+        );
     }
 }

@@ -82,7 +82,9 @@ impl InterpFilter {
     /// 每个相位单独做直流归一化（保证 DC 增益 1、相位间无电平差）。
     fn normalize_phases(&mut self) {
         for p in 0..self.factor {
-            let sum: f64 = (0..self.taps).map(|k| self.coeffs[p + k * self.factor]).sum();
+            let sum: f64 = (0..self.taps)
+                .map(|k| self.coeffs[p + k * self.factor])
+                .sum();
             if sum.abs() > 1e-12 {
                 for k in 0..self.taps {
                     self.coeffs[p + k * self.factor] /= sum;
@@ -241,7 +243,8 @@ mod tests {
         let s: Vec<f64> = (0..frames)
             .map(|n| {
                 let t = n as f64 / 48_000.0;
-                amp * (2.0 * std::f64::consts::PI * 12_000.0 * t + std::f64::consts::FRAC_PI_4).sin()
+                amp * (2.0 * std::f64::consts::PI * 12_000.0 * t + std::f64::consts::FRAC_PI_4)
+                    .sin()
             })
             .collect();
         let sample_peak = s.iter().fold(0.0f64, |m, v| m.max(v.abs()));
@@ -300,7 +303,8 @@ mod tests {
         let s: Vec<f64> = (0..frames)
             .map(|n| {
                 let t = n as f64 / 48_000.0;
-                0.8 * (2.0 * std::f64::consts::PI * 12_000.0 * t + std::f64::consts::FRAC_PI_4).sin()
+                0.8 * (2.0 * std::f64::consts::PI * 12_000.0 * t + std::f64::consts::FRAC_PI_4)
+                    .sin()
             })
             .collect();
         let mut buf = AudioBuffer::new(48_000, 1, frames);

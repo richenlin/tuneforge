@@ -92,6 +92,14 @@ export interface FfmpegStatus {
   cached: boolean;
 }
 
+/** `scan:progress` 事件负载：逐个 ffprobe 探测的进度。 */
+export interface ScanProgress {
+  /** 已探测完成的文件数。 */
+  done: number;
+  /** 本轮待探测的文件总数。 */
+  total: number;
+}
+
 export interface FormatOption {
   format: string;
   label: string;

@@ -11,11 +11,13 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use tf_core::error::{Result, TfError};
-use tf_core::model::{AudioFormat, AudioBuffer, MediaInfo};
+use tf_core::model::{AudioBuffer, AudioFormat, MediaInfo};
 
-use crate::locate::FfmpegPaths;
 use crate::capabilities::Capabilities;
-use crate::progress::{common_io_args, ProgressAcc, ProgressCallback, ProgressStage, StderrPump};
+use crate::locate::FfmpegPaths;
+use crate::progress::{
+    common_io_args, push_thread_args, ProgressAcc, ProgressCallback, ProgressStage, StderrPump,
+};
 
 /// 编码质量参数。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -116,12 +118,20 @@ pub fn default_spec(format: AudioFormat, source: &MediaInfo) -> Result<EncodeSpe
             let bits = if source_bits == Some(16) { 16 } else { 24 };
             (Some(bits), EncodeQuality::Pcm)
         }
-        AudioFormat::Alac => (Some(lossless_bit_depth(source_bits)), EncodeQuality::Lossless),
+        AudioFormat::Alac => (
+            Some(lossless_bit_depth(source_bits)),
+            EncodeQuality::Lossless,
+        ),
         AudioFormat::Mp3 => (None, EncodeQuality::Mp3Vbr { q: 0 }),
         AudioFormat::Aac => (None, EncodeQuality::AacVbr { q: 1.5 }),
         AudioFormat::Ogg => (None, EncodeQuality::OggQ { q: 6.0 }),
         AudioFormat::Opus => (None, EncodeQuality::OpusBitrate { kbps: 160 }),
-        other => return Err(TfError::Unsupported(format!("暂不支持输出 {}", other.label()))),
+        other => {
+            return Err(TfError::Unsupported(format!(
+                "暂不支持输出 {}",
+                other.label()
+            )))
+        }
     };
 
     Ok(EncodeSpec {
@@ -322,10 +332,7 @@ pub fn has_soxr(caps: &Capabilities) -> bool {
 pub fn resample_args(spec: &EncodeSpec, soxr: bool) -> Vec<String> {
     match spec.sample_rate {
         None => Vec::new(),
-        Some(rate) if soxr => vec![
-            "-af".into(),
-            format!("aresample=osr={rate}:resampler=soxr"),
-        ],
+        Some(rate) if soxr => vec!["-af".into(), format!("aresample=osr={rate}:resampler=soxr")],
         Some(rate) => vec!["-ar".into(), rate.to_string()],
     }
 }
@@ -379,6 +386,17 @@ pub fn stream_copy_args(input: &Path, out: &Path) -> Vec<String> {
     args.push("-y".into());
     args.push(out.to_string_lossy().into_owned());
     args
+}
+
+/// 编码子进程选项。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct EncodeOptions {
+    /// 需改采样率时是否用 soxr 高质量重采样（需 ffmpeg 带 libsoxr）。
+    pub soxr: bool,
+    /// 单个 ffmpeg 子进程可用的线程数（`None` = 让 ffmpeg 自定）。
+    ///
+    /// 批量并行时由 `QueueRunner::child_thread_budget()` 给出：把总线程数压在核心数以内。
+    pub threads: Option<usize>,
 }
 
 /// 只重封装音频流（不重编码）。
@@ -534,7 +552,7 @@ pub fn encode_buffer(
     buffer: &AudioBuffer,
     out: &Path,
     duration_secs: Option<f64>,
-    soxr: bool,
+    opts: EncodeOptions,
     progress: Option<Arc<ProgressCallback<'static>>>,
 ) -> Result<()> {
     if !spec.format.can_encode() {
@@ -559,7 +577,9 @@ pub fn encode_buffer(
     args.push("-vn".into());
     args.push("-map_metadata".into());
     args.push("-1".into());
-    args.extend(codec_args_with(spec, soxr)?);
+    // 输出选项：限制编码器线程数。
+    push_thread_args(&mut args, opts.threads);
+    args.extend(codec_args_with(spec, opts.soxr)?);
     args.push("-y".into());
     args.push(out.to_string_lossy().into_owned());
 
@@ -573,21 +593,17 @@ pub fn encode_buffer(
     )
 }
 
-/// 直接转码（ffmpeg → ffmpeg，不经过 Rust DSP；用于纯格式转换）。
-pub fn transcode(
-    paths: &FfmpegPaths,
+/// 直接转码参数（可单测）。`-threads` 会同时出现在输入侧（解码器）与输出侧（编码器）。
+pub fn transcode_args(
     spec: &EncodeSpec,
     input: &Path,
     out: &Path,
-    duration_secs: Option<f64>,
     keep_metadata: bool,
-    soxr: bool,
-    progress: Option<Arc<ProgressCallback<'static>>>,
-) -> Result<()> {
-    if !input.is_file() {
-        return Err(TfError::Input(format!("文件不存在：{}", input.display())));
-    }
+    opts: EncodeOptions,
+) -> Result<Vec<String>> {
     let mut args = common_io_args();
+    // 输入选项：限制解码线程数。
+    push_thread_args(&mut args, opts.threads);
     args.push("-i".into());
     args.push(input.to_string_lossy().into_owned());
     args.push("-map".into());
@@ -597,9 +613,29 @@ pub fn transcode(
     args.push("-dn".into());
     args.push("-map_metadata".into());
     args.push(if keep_metadata { "0" } else { "-1" }.into());
-    args.extend(codec_args_with(spec, soxr)?);
+    // 输出选项：限制编码器线程数。
+    push_thread_args(&mut args, opts.threads);
+    args.extend(codec_args_with(spec, opts.soxr)?);
     args.push("-y".into());
     args.push(out.to_string_lossy().into_owned());
+    Ok(args)
+}
+
+/// 直接转码（ffmpeg → ffmpeg，不经过 Rust DSP；用于纯格式转换）。
+pub fn transcode(
+    paths: &FfmpegPaths,
+    spec: &EncodeSpec,
+    input: &Path,
+    out: &Path,
+    duration_secs: Option<f64>,
+    keep_metadata: bool,
+    opts: EncodeOptions,
+    progress: Option<Arc<ProgressCallback<'static>>>,
+) -> Result<()> {
+    if !input.is_file() {
+        return Err(TfError::Input(format!("文件不存在：{}", input.display())));
+    }
+    let args = transcode_args(spec, input, out, keep_metadata, opts)?;
 
     match run_encode(paths, &args, out, duration_secs, progress, None) {
         Ok(()) => Ok(()),
@@ -744,14 +780,26 @@ mod tests {
             let candidates = sample_rate_candidates(format);
             assert!(!candidates.is_empty(), "{format:?} 应有候选值");
             for &rate in &candidates {
-                assert!(is_sample_rate_supported(format, rate), "{format:?} 候选 {rate} 应被支持");
+                assert!(
+                    is_sample_rate_supported(format, rate),
+                    "{format:?} 候选 {rate} 应被支持"
+                );
             }
-            assert!(candidates.windows(2).all(|w| w[0] < w[1]), "候选必须升序且无重复");
+            assert!(
+                candidates.windows(2).all(|w| w[0] < w[1]),
+                "候选必须升序且无重复"
+            );
         }
         // 关键硬约束
         assert_eq!(sample_rate_candidates(AudioFormat::Opus), vec![48_000]);
-        assert_eq!(sample_rate_candidates(AudioFormat::Mp3), vec![32_000, 44_100, 48_000]);
-        assert!(sample_rate_candidates(AudioFormat::Ape).is_empty(), "不可编码格式没有候选");
+        assert_eq!(
+            sample_rate_candidates(AudioFormat::Mp3),
+            vec![32_000, 44_100, 48_000]
+        );
+        assert!(
+            sample_rate_candidates(AudioFormat::Ape).is_empty(),
+            "不可编码格式没有候选"
+        );
         assert!(!is_sample_rate_supported(AudioFormat::Mp3, 96_000));
         assert!(!is_sample_rate_supported(AudioFormat::Opus, 44_100));
         assert!(!is_sample_rate_supported(AudioFormat::Ape, 44_100));
@@ -760,26 +808,53 @@ mod tests {
 
     #[test]
     fn recommendation_keeps_source_when_supported() {
-        assert_eq!(recommended_sample_rate(AudioFormat::Flac, Some(44_100)), None);
-        assert_eq!(recommended_sample_rate(AudioFormat::Mp3, Some(44_100)), None);
+        assert_eq!(
+            recommended_sample_rate(AudioFormat::Flac, Some(44_100)),
+            None
+        );
+        assert_eq!(
+            recommended_sample_rate(AudioFormat::Mp3, Some(44_100)),
+            None
+        );
         assert_eq!(recommended_sample_rate(AudioFormat::Mp3, Some(8_000)), None);
-        assert_eq!(recommended_sample_rate(AudioFormat::Aac, Some(96_000)), None);
-        assert_eq!(recommended_sample_rate(AudioFormat::Opus, Some(48_000)), None);
+        assert_eq!(
+            recommended_sample_rate(AudioFormat::Aac, Some(96_000)),
+            None
+        );
+        assert_eq!(
+            recommended_sample_rate(AudioFormat::Opus, Some(48_000)),
+            None
+        );
         assert_eq!(recommended_sample_rate(AudioFormat::Flac, None), None);
     }
 
     #[test]
     fn recommendation_resamples_only_when_required() {
         // 96 kHz 源 → MP3 上限 48 kHz，取不高于源的最大候选
-        assert_eq!(recommended_sample_rate(AudioFormat::Mp3, Some(96_000)), Some(48_000));
+        assert_eq!(
+            recommended_sample_rate(AudioFormat::Mp3, Some(96_000)),
+            Some(48_000)
+        );
         // 44.1 kHz 源 → Opus 硬约束 48 kHz
-        assert_eq!(recommended_sample_rate(AudioFormat::Opus, Some(44_100)), Some(48_000));
+        assert_eq!(
+            recommended_sample_rate(AudioFormat::Opus, Some(44_100)),
+            Some(48_000)
+        );
         // 192 kHz 源 → AAC 上限 96 kHz
-        assert_eq!(recommended_sample_rate(AudioFormat::Aac, Some(192_000)), Some(96_000));
+        assert_eq!(
+            recommended_sample_rate(AudioFormat::Aac, Some(192_000)),
+            Some(96_000)
+        );
         // 源采样率未知 + Opus 仍要给硬约束值
-        assert_eq!(recommended_sample_rate(AudioFormat::Opus, None), Some(48_000));
+        assert_eq!(
+            recommended_sample_rate(AudioFormat::Opus, None),
+            Some(48_000)
+        );
         // 低于所有候选（4 kHz）→ 回退首选
-        assert_eq!(recommended_sample_rate(AudioFormat::Mp3, Some(4_000)), Some(44_100));
+        assert_eq!(
+            recommended_sample_rate(AudioFormat::Mp3, Some(4_000)),
+            Some(44_100)
+        );
     }
 
     #[test]
@@ -794,9 +869,18 @@ mod tests {
             AudioFormat::Ogg,
             AudioFormat::Opus,
         ] {
-            for source in [None, Some(44_100), Some(48_000), Some(96_000), Some(192_000)] {
+            for source in [
+                None,
+                Some(44_100),
+                Some(48_000),
+                Some(96_000),
+                Some(192_000),
+            ] {
                 let options = sample_rate_options(format, source);
-                assert!(options.len() >= 2, "{format:?}/{source:?} 至少要有“保持源”+1 个候选");
+                assert!(
+                    options.len() >= 2,
+                    "{format:?}/{source:?} 至少要有“保持源”+1 个候选"
+                );
                 assert!(options[0].value.is_none(), "第一项必须是保持源");
                 assert_eq!(
                     options.iter().filter(|option| option.recommended).count(),
@@ -821,7 +905,9 @@ mod tests {
         let opus = sample_rate_options(AudioFormat::Opus, Some(44_100));
         assert!(!opus[0].supported);
         assert!(opus[0].label.contains("不支持"));
-        assert!(opus.iter().any(|o| o.value == Some(48_000) && o.recommended));
+        assert!(opus
+            .iter()
+            .any(|o| o.value == Some(48_000) && o.recommended));
         assert!(opus[1].label.contains("Opus 原生"));
     }
 
@@ -906,7 +992,10 @@ mod tests {
         let args = codec_args(&flac).unwrap();
         assert!(args.contains(&"flac".to_string()));
         assert!(args.contains(&"s32".to_string()));
-        assert_eq!(args[args.iter().position(|a| a == "-compression_level").unwrap() + 1], "8");
+        assert_eq!(
+            args[args.iter().position(|a| a == "-compression_level").unwrap() + 1],
+            "8"
+        );
 
         let wav = EncodeSpec {
             format: AudioFormat::Wav,
@@ -926,7 +1015,9 @@ mod tests {
             bit_depth: Some(16),
             ..wav.clone()
         };
-        assert!(codec_args(&aiff).unwrap().contains(&"pcm_s16be".to_string()));
+        assert!(codec_args(&aiff)
+            .unwrap()
+            .contains(&"pcm_s16be".to_string()));
 
         let mp3 = EncodeSpec {
             format: AudioFormat::Mp3,
@@ -937,7 +1028,10 @@ mod tests {
         };
         let args = codec_args(&mp3).unwrap();
         assert!(args.contains(&"libmp3lame".to_string()));
-        assert_eq!(args[args.iter().position(|a| a == "-q:a").unwrap() + 1], "0");
+        assert_eq!(
+            args[args.iter().position(|a| a == "-q:a").unwrap() + 1],
+            "0"
+        );
 
         let opus = EncodeSpec {
             quality: EncodeQuality::OpusBitrate { kbps: 192 },
@@ -1007,7 +1101,7 @@ mod tests {
             Path::new("out.flac"),
             None,
             true,
-            false,
+            EncodeOptions::default(),
             None,
         )
         .unwrap_err();
@@ -1020,15 +1114,34 @@ mod tests {
     fn lossless_defaults_keep_source_bit_depth() {
         // 设计 §15 风险 7：16-bit 源不应被无谓升到 24-bit
         let cd = media(Some(16), 44_100);
-        assert_eq!(default_spec(AudioFormat::Flac, &cd).unwrap().bit_depth, Some(16));
-        assert_eq!(default_spec(AudioFormat::Alac, &cd).unwrap().bit_depth, Some(16));
+        assert_eq!(
+            default_spec(AudioFormat::Flac, &cd).unwrap().bit_depth,
+            Some(16)
+        );
+        assert_eq!(
+            default_spec(AudioFormat::Alac, &cd).unwrap().bit_depth,
+            Some(16)
+        );
 
         let hires = media(Some(24), 96_000);
-        assert_eq!(default_spec(AudioFormat::Flac, &hires).unwrap().bit_depth, Some(24));
+        assert_eq!(
+            default_spec(AudioFormat::Flac, &hires).unwrap().bit_depth,
+            Some(24)
+        );
 
         // 源位深未知 / 32-bit float：回退 24
-        assert_eq!(default_spec(AudioFormat::Flac, &media(None, 48_000)).unwrap().bit_depth, Some(24));
-        assert_eq!(default_spec(AudioFormat::Flac, &media(Some(32), 192_000)).unwrap().bit_depth, Some(24));
+        assert_eq!(
+            default_spec(AudioFormat::Flac, &media(None, 48_000))
+                .unwrap()
+                .bit_depth,
+            Some(24)
+        );
+        assert_eq!(
+            default_spec(AudioFormat::Flac, &media(Some(32), 192_000))
+                .unwrap()
+                .bit_depth,
+            Some(24)
+        );
     }
 
     #[test]
@@ -1048,22 +1161,60 @@ mod tests {
         // 完全保持源 → 可直接重封装（比特精确）
         assert!(can_stream_copy(&source, &base));
         // 明确写出与源相等的参数 → 仍可复制
-        let same = EncodeSpec { bit_depth: Some(16), sample_rate: Some(44_100), channels: Some(2), ..base.clone() };
+        let same = EncodeSpec {
+            bit_depth: Some(16),
+            sample_rate: Some(44_100),
+            channels: Some(2),
+            ..base.clone()
+        };
         assert!(can_stream_copy(&source, &same));
         // 降位深 → 必须走 DSP（否则无抖动）
-        assert!(!can_stream_copy(&source, &EncodeSpec { bit_depth: Some(8), ..base.clone() }));
+        assert!(!can_stream_copy(
+            &source,
+            &EncodeSpec {
+                bit_depth: Some(8),
+                ..base.clone()
+            }
+        ));
         // 改采样率/声道/格式 → 不能复制
-        assert!(!can_stream_copy(&source, &EncodeSpec { sample_rate: Some(48_000), ..base.clone() }));
-        assert!(!can_stream_copy(&source, &EncodeSpec { channels: Some(1), ..base.clone() }));
-        assert!(!can_stream_copy(&source, &EncodeSpec { format: AudioFormat::Mp3, ..base.clone() }));
+        assert!(!can_stream_copy(
+            &source,
+            &EncodeSpec {
+                sample_rate: Some(48_000),
+                ..base.clone()
+            }
+        ));
+        assert!(!can_stream_copy(
+            &source,
+            &EncodeSpec {
+                channels: Some(1),
+                ..base.clone()
+            }
+        ));
+        assert!(!can_stream_copy(
+            &source,
+            &EncodeSpec {
+                format: AudioFormat::Mp3,
+                ..base.clone()
+            }
+        ));
         // 不可编码格式（APE/DSD）永远不能作为输出
-        let ape = EncodeSpec { format: AudioFormat::Ape, ..base.clone() };
+        let ape = EncodeSpec {
+            format: AudioFormat::Ape,
+            ..base.clone()
+        };
         assert!(!can_stream_copy(&source, &ape));
         // 源位深未知（如 DSD）也不影响“保持源”的复制判定
         let mut unknown = source.clone();
         unknown.bits_per_sample = None;
         unknown.format = Some(AudioFormat::Wav);
-        assert!(can_stream_copy(&unknown, &EncodeSpec { format: AudioFormat::Wav, ..base }));
+        assert!(can_stream_copy(
+            &unknown,
+            &EncodeSpec {
+                format: AudioFormat::Wav,
+                ..base
+            }
+        ));
     }
 
     #[test]
@@ -1072,9 +1223,51 @@ mod tests {
         let joined = args.join(" ");
         assert!(joined.contains("-c:a copy"), "{joined}");
         assert!(joined.contains("-map 0:a:0"), "{joined}");
-        assert!(joined.contains("-map_metadata -1"), "不写 ffmpeg 标签：{joined}");
+        assert!(
+            joined.contains("-map_metadata -1"),
+            "不写 ffmpeg 标签：{joined}"
+        );
         assert!(!joined.contains("-ar"), "重封装不得重采样：{joined}");
         assert!(!joined.contains("-ac"), "重封装不得改声道：{joined}");
+    }
+
+    #[test]
+    fn transcode_args_apply_thread_budget_on_both_sides() {
+        let spec = default_spec(AudioFormat::Mp3, &media(Some(16), 44_100)).unwrap();
+        let opts = EncodeOptions {
+            soxr: false,
+            threads: Some(2),
+        };
+        let args = transcode_args(
+            &spec,
+            Path::new("in.flac"),
+            Path::new("out.mp3"),
+            false,
+            opts,
+        )
+        .unwrap();
+        let input = args.iter().position(|a| a == "-i").unwrap();
+        let threads: Vec<usize> = args
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| *a == "-threads")
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(threads.len(), 2, "输入侧与输出侧各带一次：{args:?}");
+        assert!(threads[0] < input, "解码线程必须放在 -i 之前");
+        assert!(threads[1] > input, "编码线程必须放在输出选项里");
+        assert!(args.iter().any(|a| a == "libmp3lame"), "{args:?}");
+
+        // 不给预算时参数里不应出现 -threads（单文件处理保持原行为）。
+        let plain = transcode_args(
+            &spec,
+            Path::new("in.flac"),
+            Path::new("out.mp3"),
+            false,
+            EncodeOptions::default(),
+        )
+        .unwrap();
+        assert!(!plain.iter().any(|a| a == "-threads"), "{plain:?}");
     }
 
     #[test]
@@ -1085,7 +1278,10 @@ mod tests {
             encoders: Vec::new(),
             raw_encoders: String::new(),
         };
-        let caps_without = Capabilities { configuration: "--disable-everything".into(), ..caps_with.clone() };
+        let caps_without = Capabilities {
+            configuration: "--disable-everything".into(),
+            ..caps_with.clone()
+        };
         assert!(has_soxr(&caps_with));
         assert!(!has_soxr(&caps_without));
 
@@ -1097,11 +1293,17 @@ mod tests {
             quality: EncodeQuality::FlacLevel { level: 8 },
         };
         let soxr = resample_args(&spec, true).join(" ");
-        assert!(soxr.contains("aresample=osr=48000:resampler=soxr"), "{soxr}");
+        assert!(
+            soxr.contains("aresample=osr=48000:resampler=soxr"),
+            "{soxr}"
+        );
         let plain = resample_args(&spec, false).join(" ");
         assert_eq!(plain, "-ar 48000");
         // 不需要重采样时不能插入重采样滤镜
-        let keep = EncodeSpec { sample_rate: None, ..spec };
+        let keep = EncodeSpec {
+            sample_rate: None,
+            ..spec
+        };
         assert!(resample_args(&keep, true).is_empty());
         assert!(resample_args(&keep, false).is_empty());
     }

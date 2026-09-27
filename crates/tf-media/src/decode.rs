@@ -11,7 +11,9 @@ use tf_core::error::{Result, TfError};
 use tf_core::model::AudioBuffer;
 
 use crate::locate::FfmpegPaths;
-use crate::progress::{common_io_args, ProgressAcc, ProgressCallback, ProgressStage, StderrPump};
+use crate::progress::{
+    common_io_args, push_thread_args, ProgressAcc, ProgressCallback, ProgressStage, StderrPump,
+};
 
 /// 解码选项。
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -28,6 +30,10 @@ pub struct DecodeOptions {
     pub filters: Vec<String>,
     /// 预估总时长（用于进度百分比）。
     pub source_duration_secs: Option<f64>,
+    /// 解码器线程数（`None` = 让 ffmpeg 自定）。
+    ///
+    /// 批量并行时由 `QueueRunner::child_thread_budget()` 给出，避免多个 ffmpeg 抢满 CPU。
+    pub threads: Option<usize>,
 }
 
 /// 解码结果。
@@ -51,6 +57,8 @@ pub fn decode_args(file: &Path, opts: &DecodeOptions, channels: usize) -> Vec<St
         args.push("-ss".into());
         args.push(format!("{start:.6}"));
     }
+    // 输入选项：限制解码线程数。
+    push_thread_args(&mut args, opts.threads);
     args.push("-i".into());
     args.push(file.to_string_lossy().into_owned());
     if let Some(duration) = opts.duration_secs {
@@ -188,10 +196,7 @@ pub fn decode_to_buffer(
     }
 
     if frames == 0 {
-        return Err(TfError::Decode(format!(
-            "解码结果为空：{}",
-            file.display()
-        )));
+        return Err(TfError::Decode(format!("解码结果为空：{}", file.display())));
     }
 
     if let Some(sr) = opts.sample_rate {
@@ -229,8 +234,14 @@ mod tests {
             duration_secs: Some(2.0),
             filters: vec!["lowpass=f=30000".into()],
             source_duration_secs: Some(10.0),
+            threads: Some(2),
         };
         let args = decode_args(Path::new("a.dsf"), &opts, 1);
+        // 线程预算放在 `-i` 之前（解码器输入选项）。
+        let threads = args.iter().position(|a| a == "-threads").unwrap();
+        let input = args.iter().position(|a| a == "-i").unwrap();
+        assert!(threads < input);
+        assert_eq!(args[threads + 1], "2");
         let ss = args.iter().position(|a| a == "-ss").unwrap();
         assert_eq!(args[ss + 1], "1.500000");
         let t = args.iter().position(|a| a == "-t").unwrap();

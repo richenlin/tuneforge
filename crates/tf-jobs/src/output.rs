@@ -386,7 +386,11 @@ mod tests {
         let resolver = OutputResolver::new(dir.path(), ConflictPolicy::Skip).unwrap();
         match resolver.resolve("bad/name:?.flac").unwrap() {
             OutputDecision::Write { final_path, .. } => {
-                let name = final_path.file_name().unwrap().to_string_lossy().to_string();
+                let name = final_path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string();
                 assert!(!name.contains('/'));
                 assert!(!name.contains(':'));
                 assert!(name.ends_with(".flac"));

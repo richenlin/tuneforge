@@ -70,9 +70,24 @@ fn mp3_output_is_id3v23_and_keeps_source_rate() {
     // 44.1 kHz 立体声 + 中文标签
     let ok = tf_media::process::command(&paths.ffmpeg)
         .args([
-            "-hide_banner", "-v", "error", "-f", "lavfi", "-i",
-            "sine=frequency=440:duration=2", "-ar", "44100", "-ac", "2", "-c:a", "flac",
-            "-metadata", "title=黄昏", "-metadata", "artist=周传雄", "-y",
+            "-hide_banner",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=2",
+            "-ar",
+            "44100",
+            "-ac",
+            "2",
+            "-c:a",
+            "flac",
+            "-metadata",
+            "title=黄昏",
+            "-metadata",
+            "artist=周传雄",
+            "-y",
         ])
         .arg(&input)
         .status()
@@ -117,14 +132,18 @@ fn mp3_output_is_id3v23_and_keeps_source_rate() {
     };
     let report = pipeline.produce(&job, &target, &ctx).unwrap();
     assert!(target.is_file(), "输出文件应存在：{}", target.display());
-    assert!(report.warnings.is_empty(), "不应有告警：{:?}", report.warnings);
+    assert!(
+        report.warnings.is_empty(),
+        "不应有告警：{:?}",
+        report.warnings
+    );
 
     // 标签必须是 ID3v2.3（老播放器/车载能认），且中文标签不丢
     let bytes = std::fs::read(&target).unwrap();
     assert_eq!(
         id3_major_version(&bytes),
         Some(3),
-        "MP3 输出应为 ID3v2.3（当前 {}", 
+        "MP3 输出应为 ID3v2.3（当前 {}",
         id3_major_version(&bytes).map_or("无标签".into(), |v| format!("v2.{v}"))
     );
     let tags = tf_tags::read_tags(&target).unwrap();

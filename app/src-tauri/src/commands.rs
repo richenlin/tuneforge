@@ -20,7 +20,7 @@ use tf_media::{decode, probe, FfmpegPaths};
 use tf_tags as tags_io;
 
 use crate::dto::{
-    err_json, item_id, FieldEdit, FfmpegStatus, FormatOption, JobRequest, MeasureRow,
+    err_json, item_id, FfmpegStatus, FieldEdit, FormatOption, JobRequest, MeasureRow, ScanProgress,
 };
 use crate::state::{cover_data_url, AppState};
 
@@ -93,11 +93,7 @@ pub fn ffmpeg_status(app: AppHandle, state: State<'_, AppState>) -> FfmpegStatus
 
 /// 指定 ffmpeg 路径（目录或可执行文件）；立即返回并在后台重新探测。
 #[tauri::command]
-pub fn set_ffmpeg_path(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    path: String,
-) -> FfmpegStatus {
+pub fn set_ffmpeg_path(app: AppHandle, state: State<'_, AppState>, path: String) -> FfmpegStatus {
     let trimmed = path.trim();
     state.set_ffmpeg_override(if trimmed.is_empty() {
         None
@@ -160,9 +156,11 @@ fn build_item(paths: &FfmpegPaths, file: &Path) -> MediaItem {
 
 /// 扫描输入（文件夹/文件）。
 ///
-/// 每个文件要 spawn 一次 ffprobe，因此放到阻塞线程池执行，避免卡住 UI 线程。
+/// 每个文件要 spawn 一次 ffprobe，因此放到阻塞线程池执行，避免卡住 UI 线程；
+/// 逐文件回推 `scan:progress`，前端据此锁定界面并显示进度（多文件时可能持续数十秒）。
 #[tauri::command]
 pub async fn scan_inputs(
+    app: AppHandle,
     state: State<'_, AppState>,
     paths: Vec<String>,
     recursive: bool,
@@ -171,7 +169,19 @@ pub async fn scan_inputs(
     let inputs: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
     let items = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<MediaItem>, String> {
         let files = tf_media::scan::scan_inputs(&inputs, recursive).map_err(map_err)?;
-        Ok(files.iter().map(|file| build_item(&ffmpeg, file)).collect())
+        let total = files.len();
+        let mut items = Vec::with_capacity(total);
+        for (index, file) in files.iter().enumerate() {
+            items.push(build_item(&ffmpeg, file));
+            let _ = app.emit(
+                "scan:progress",
+                ScanProgress {
+                    done: index + 1,
+                    total,
+                },
+            );
+        }
+        Ok(items)
     })
     .await
     .map_err(|e| format!("扫描线程异常：{e}"))??;
@@ -271,8 +281,7 @@ pub fn default_encode_spec(
     format: String,
     item_id: Option<String>,
 ) -> Result<tf_media::EncodeSpec, String> {
-    let target = AudioFormat::from_id(&format)
-        .ok_or_else(|| format!("未知格式 {format}"))?;
+    let target = AudioFormat::from_id(&format).ok_or_else(|| format!("未知格式 {format}"))?;
     let media = item_id
         .and_then(|id| state.item(&id))
         .and_then(|item| item.media)
@@ -291,7 +300,10 @@ pub async fn measure_loudness(
     let (paths, _caps) = state.require_toolchain().map_err(map_err)?;
     let items = state.select(&ids);
     let rows = tauri::async_runtime::spawn_blocking(move || {
-        items.iter().map(|item| measure_one(&paths, item)).collect::<Vec<_>>()
+        items
+            .iter()
+            .map(|item| measure_one(&paths, item))
+            .collect::<Vec<_>>()
     })
     .await
     .map_err(|e| format!("测量线程异常：{e}"))?;
@@ -442,7 +454,10 @@ pub fn guess_tags(
 
 /// 封面预览（data URL）。
 #[tauri::command]
-pub fn cover_preview(state: State<'_, AppState>, item_id: String) -> Result<Option<String>, String> {
+pub fn cover_preview(
+    state: State<'_, AppState>,
+    item_id: String,
+) -> Result<Option<String>, String> {
     let item = state
         .item(&item_id)
         .ok_or_else(|| "条目不存在".to_string())?;
@@ -517,8 +532,13 @@ fn build_plan(
                 }
             }
             let sources = to_sources(&items)?;
-            plan_convert(sources, &ConvertConfig::from(config.clone()), &output_dir, policy)
-                .map_err(map_err)
+            plan_convert(
+                sources,
+                &ConvertConfig::from(config.clone()),
+                &output_dir,
+                policy,
+            )
+            .map_err(map_err)
         }
         JobRequest::Rename {
             template,
@@ -624,13 +644,26 @@ pub fn start_job(
     let job_id = uuid::Uuid::new_v4().to_string();
     let cancel = state.register_job(&job_id, plan.len());
     let registry = state.job_registry();
-    let pipeline = Arc::new(FfmpegPipeline::with_capabilities(paths, &caps));
+    // 并发度决定「同时跑几个文件」，并反推出单个 ffmpeg 的线程预算（总线程数 ≈ 核心数）。
+    let runner = QueueRunner::new(0);
+    let pipeline = Arc::new(
+        FfmpegPipeline::with_capabilities(paths, &caps).with_threads(runner.child_thread_budget()),
+    );
+    tracing::info!(
+        concurrency = runner.concurrency(),
+        threads_per_job = ?runner.child_thread_budget(),
+        jobs = plan.len(),
+        memory_budget = pipeline.memory_budget(),
+        "开始批量任务"
+    );
     let handle = app.clone();
     let id_for_thread = job_id.clone();
 
     std::thread::spawn(move || {
-        let sink: Arc<dyn EventSink> = Arc::new(EmitterSink { app: handle.clone() });
-        let result = QueueRunner::new(0).run(&plan, pipeline.as_ref(), sink, cancel);
+        let sink: Arc<dyn EventSink> = Arc::new(EmitterSink {
+            app: handle.clone(),
+        });
+        let result = runner.run(&plan, pipeline.as_ref(), sink, cancel);
         {
             let mut guard = registry.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(slot) = guard.get_mut(&id_for_thread) {

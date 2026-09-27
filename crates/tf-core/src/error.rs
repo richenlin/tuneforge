@@ -113,7 +113,10 @@ mod tests {
 
     #[test]
     fn io_error_is_retryable_and_classified() {
-        let err = TfError::from(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied"));
+        let err = TfError::from(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "denied",
+        ));
         assert_eq!(err.category(), ErrorCategory::Io);
         assert!(err.is_retryable());
         assert!(err.to_string().contains("denied"));

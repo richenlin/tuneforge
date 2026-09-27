@@ -19,6 +19,7 @@ import type {
   RenamePreviewItem,
   SampleRateOption,
   SanitizeOptions,
+  ScanProgress,
   TagField,
   TemplatePreset,
 } from "./types";
@@ -150,6 +151,18 @@ export async function listenFfmpegStatus(
   onStatus: (status: FfmpegStatus) => void,
 ): Promise<UnlistenFn> {
   return listen<FfmpegStatus>("ffmpeg:status", (e) => onStatus(e.payload));
+}
+
+/**
+ * 订阅扫描/探测进度（`scan:progress`）。
+ *
+ * 后端每完成一个文件的 ffprobe 就回推一次，前端据此显示「n / total」，
+ * 避免多文件拖入时长时间无反馈。
+ */
+export async function listenScanProgress(
+  onProgress: (progress: ScanProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<ScanProgress>("scan:progress", (e) => onProgress(e.payload));
 }
 
 export type { ConflictPolicy };

@@ -163,7 +163,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let audio = write_minimal_wav(&dir.path().join("song.wav"), 8000, 1, 800);
         set_cover(&audio, Some(&CoverArt::new("image/png", PNG.to_vec()))).unwrap();
-        set_cover(&audio, Some(&CoverArt::new("image/jpeg", vec![0xFF, 0xD8, 0xFF, 0xE0]))).unwrap();
+        set_cover(
+            &audio,
+            Some(&CoverArt::new("image/jpeg", vec![0xFF, 0xD8, 0xFF, 0xE0])),
+        )
+        .unwrap();
         let covers = read_covers(&audio).unwrap();
         assert_eq!(covers.len(), 1);
         assert_eq!(covers[0].mime, "image/jpeg");

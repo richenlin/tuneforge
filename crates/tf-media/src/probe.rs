@@ -261,7 +261,9 @@ mod tests {
           "format": {"format_name": "dsf"}
         }"#;
         let raw: Value = serde_json::from_str(json).unwrap();
-        let m = media_info_from_value(Path::new("a.dsf"), raw).unwrap().media;
+        let m = media_info_from_value(Path::new("a.dsf"), raw)
+            .unwrap()
+            .media;
         assert_eq!(m.format, Some(AudioFormat::Dsf));
         assert!(m.is_float);
         assert_eq!(m.bits_per_sample, None);
@@ -292,7 +294,9 @@ mod tests {
           "format":{"format_name":"mp3","duration":"12.5","bit_rate":"320000"}
         }"#;
         let raw: Value = serde_json::from_str(json).unwrap();
-        let m = media_info_from_value(Path::new("a.mp3"), raw).unwrap().media;
+        let m = media_info_from_value(Path::new("a.mp3"), raw)
+            .unwrap()
+            .media;
         assert_eq!(m.duration_secs, Some(12.5));
         assert_eq!(m.bit_rate, Some(320_000));
         assert_eq!(m.frames, Some(551_250));

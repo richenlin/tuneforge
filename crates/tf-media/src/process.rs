@@ -43,7 +43,10 @@ mod tests {
             .output()
             .expect("cmd 应可执行");
         #[cfg(not(windows))]
-        let output = command("echo").arg("tf-ok").output().expect("echo 应可执行");
+        let output = command("echo")
+            .arg("tf-ok")
+            .output()
+            .expect("echo 应可执行");
         assert!(output.status.success());
         assert!(String::from_utf8_lossy(&output.stdout).contains("tf-ok"));
     }

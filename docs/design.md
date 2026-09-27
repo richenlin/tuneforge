@@ -296,7 +296,17 @@ ui  →  src-tauri  →  tf-jobs  →  { tf-media, tf-tags }  →  tf-core
 - 任务清单可导出/重跑。
 
 ### 10.5 并发
-- 默认并发 = `min(CPU 核心数, 4)`（FFmpeg 本身可能多线程，避免过载）。
+- 默认并发 = `min(CPU 核心数, 16)`（`tf_jobs::MAX_DEFAULT_CONCURRENCY`），可用环境变量
+  `TUNEFORGE_CONCURRENCY` 覆盖（例如 HDD 库或低配机器调小）。
+  音频编码器（libmp3lame / flac / alac）基本都是单线程的，所以「多文件并行」比「单文件多线程」更有效。
+- 每个 ffmpeg 子进程的线程预算 = `max(1, 核心数 / 并发度)`（`QueueRunner::child_thread_budget`），
+  由流水线写进 `-threads`（输入侧限制解码器、输出侧限制编码器），使「总线程数 ≈ 核心数」，
+  不再出现多个 ffmpeg 各自开满线程互相抢 CPU。
+- 内存闸门：DSP 路径（归一化 / 需抖动降位深 / 折混）会把整首曲子展开成 `f64` 平面缓冲
+  （5 分钟立体声 ≈ 170 MB），`MemoryGate` 默认按 **2 GiB** 预算预约解码内存
+  （`TUNEFORGE_MEMORY_MB` 可调），超预算的任务在闸门排队，而不是把内存吃爆。
+- 实测（16 线程 / 16 个 120 秒 FLAC，`cargo run -p tf-jobs --release --example parallel_bench`）：
+  纯转码 1 并发 8.90 s → 4 并发 2.77 s → 16 并发 1.52 s；归一化（DSP）1 并发 25.3 s → 4 并发 8.0 s → 16 并发 5.3 s。
 - 全局进度 = 完成文件数 / 总数；单文件进度用 FFmpeg `-progress` 解析。
 
 ---

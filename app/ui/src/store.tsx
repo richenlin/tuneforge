@@ -11,7 +11,7 @@ import {
   type ReactNode,
 } from "react";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { api, ApiError, listenFfmpegStatus, listenJobEvents } from "./api";
+import { api, ApiError, listenFfmpegStatus, listenJobEvents, listenScanProgress } from "./api";
 import {
   markFinished,
   markProgress,
@@ -66,6 +66,12 @@ export interface AppContextValue {
   itemsById: Map<string, MediaItem>;
   refreshItems: () => Promise<void>;
   scan: (paths: string[], recursive: boolean) => Promise<void>;
+  /** 正在扫描/探测刚加入的文件（界面需要锁定 + 加载态）。 */
+  scanning: boolean;
+  /** 本轮扫描提交的路径/文件夹数量（提示文案用）。 */
+  scanTargets: number;
+  /** 逐文件探测进度（后端 `scan:progress`），用于遮罩里的「n / total」。 */
+  scanProgress: MeasureProgress;
   clearList: () => Promise<void>;
   removeItems: (ids: string[]) => Promise<void>;
 
@@ -170,6 +176,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [jobError, setJobError] = useState<string | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [toast, setToast] = useState<Toast | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const [scanTargets, setScanTargets] = useState(0);
+  const [scanProgress, setScanProgress] = useState<MeasureProgress>({ done: 0, total: 0 });
+  const scanInFlight = useRef(false);
   const toastTimer = useRef<number | null>(null);
   const requestBuilder = useRef<(() => JobRequest | null) | null>(null);
 
@@ -241,6 +251,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
   }, [pushLog]);
 
+  // 逐文件探测进度：后端每完成一个 ffprobe 就回推一次，用于遮罩里的「n / total」。
+  useEffect(() => {
+    let dispose: (() => void) | null = null;
+    let cancelled = false;
+    void listenScanProgress((next) => setScanProgress(next)).then((unlisten) => {
+      if (cancelled) unlisten();
+      else dispose = unlisten;
+    });
+    return () => {
+      cancelled = true;
+      dispose?.();
+    };
+  }, []);
+
   const applyFfmpegPath = useCallback(
     async (path: string) => {
       try {
@@ -302,6 +326,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const scan = useCallback(
     async (paths: string[], recursive: boolean) => {
       if (paths.length === 0) return;
+      // 扫描（含 ffprobe 探测）可能持续数秒到数十秒：加锁 + 加载态，
+      // 并把重复拖入直接拦下，避免用户以为功能失效而反复操作。
+      if (scanInFlight.current) {
+        notify("info", "上一批文件还在扫描中，请稍候…");
+        return;
+      }
+      scanInFlight.current = true;
+      setScanTargets(paths.length);
+      setScanProgress({ done: 0, total: 0 });
+      setScanning(true);
       try {
         const scanned = await api.scanInputs(paths, recursive);
         const fresh = await api.listItems();
@@ -314,6 +348,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         pushLog("info", `扫描完成：${scanned.length} 个文件${recursive ? "（含子目录）" : ""}`);
       } catch (error) {
         notify("error", errorText(error));
+      } finally {
+        scanInFlight.current = false;
+        setScanning(false);
+        setScanTargets(0);
+        setScanProgress({ done: 0, total: 0 });
       }
     },
     [notify, pushLog],
@@ -629,6 +668,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     itemsById,
     refreshItems,
     scan,
+    scanning,
+    scanTargets,
+    scanProgress,
     clearList,
     removeItems,
     selected,

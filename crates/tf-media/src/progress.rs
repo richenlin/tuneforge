@@ -213,6 +213,19 @@ pub fn common_io_args() -> Vec<String> {
     ]
 }
 
+/// 追加线程预算（`-threads n`）。
+///
+/// 批量转换会同时跑多个 ffmpeg，若每个都用满全部核心会互相抢 CPU、
+/// 反而拖慢整体；`QueueRunner::child_thread_budget()` 给出「单个子进程可用的线程数」，
+/// 由调用方把它放在 `-i` 之前（解码器）或输出参数里（编码器）。
+/// `None` / `0` 表示不改动，让 ffmpeg 自己决定（单文件处理时的默认行为）。
+pub fn push_thread_args(args: &mut Vec<String>, threads: Option<usize>) {
+    if let Some(n) = threads.filter(|n| *n > 0) {
+        args.push("-threads".into());
+        args.push(n.to_string());
+    }
+}
+
 /// 统一的子进程构造（stdin/stdout/stderr 均由调用方决定）。
 pub fn build_command(program: &std::path::Path, args: &[String]) -> std::process::Command {
     let mut cmd = crate::process::command(program);
@@ -284,6 +297,17 @@ mod tests {
         let args = common_io_args();
         assert!(args.contains(&"-progress".to_string()));
         assert!(args.contains(&"pipe:2".to_string()));
+    }
+
+    #[test]
+    fn thread_args_are_optional() {
+        let mut args = Vec::new();
+        push_thread_args(&mut args, None);
+        push_thread_args(&mut args, Some(0));
+        assert!(args.is_empty());
+
+        push_thread_args(&mut args, Some(2));
+        assert_eq!(args, vec!["-threads".to_string(), "2".to_string()]);
     }
 
     #[test]

@@ -220,7 +220,11 @@ impl AppState {
         if ids.is_empty() {
             return guard.clone();
         }
-        guard.iter().filter(|i| ids.contains(&i.id)).cloned().collect()
+        guard
+            .iter()
+            .filter(|i| ids.contains(&i.id))
+            .cloned()
+            .collect()
     }
 
     /// 对选中条目就地更新。
@@ -305,7 +309,9 @@ fn probe_toolchain(
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(Path::to_path_buf));
-    let resource_dir = exe_dir.as_deref().and_then(|dir| dir.parent().map(Path::to_path_buf));
+    let resource_dir = exe_dir
+        .as_deref()
+        .and_then(|dir| dir.parent().map(Path::to_path_buf));
     let candidates = tf_media::locate::candidate_dirs(exe_dir.as_deref(), resource_dir.as_deref());
     let paths = tf_media::locate::discover(override_dir, &candidates).map_err(|e| e.to_string())?;
 
@@ -427,9 +433,15 @@ mod tests {
         let first = state.items()[0].id.clone();
         assert_eq!(state.select(&[first.clone()]).len(), 1);
         state.update_items(&[first.clone()], |i| i.tags.title = Some("新标题".into()));
-        assert_eq!(state.item(&first).unwrap().tags.title.as_deref(), Some("新标题"));
+        assert_eq!(
+            state.item(&first).unwrap().tags.title.as_deref(),
+            Some("新标题")
+        );
         state.stage_cover(&first, CoverAction::Remove);
-        assert!(matches!(state.take_cover(&first), Some(CoverAction::Remove)));
+        assert!(matches!(
+            state.take_cover(&first),
+            Some(CoverAction::Remove)
+        ));
         state.remove_items(&[first]);
         assert_eq!(state.items().len(), 1);
         state.clear_items();

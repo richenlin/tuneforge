@@ -368,9 +368,7 @@ pub fn to_halfwidth(s: &str) -> String {
     s.chars()
         .map(|c| match c {
             '\u{3000}' => ' ',
-            '\u{FF01}'..='\u{FF5E}' => {
-                char::from_u32(c as u32 - 0xFEE0).unwrap_or(c)
-            }
+            '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
             _ => c,
         })
         .collect()
@@ -758,7 +756,11 @@ mod tests {
         assert_eq!(preset.label, "标题 - 艺术家");
         let rendered = render(preset.template, &tags(), MissingFieldPolicy::Empty);
         assert_eq!(rendered.text, "Yesterday - The Beatles");
-        assert_eq!(presets()[1].id, "title-artist", "应紧跟在“艺术家 - 标题”之后");
+        assert_eq!(
+            presets()[1].id,
+            "title-artist",
+            "应紧跟在“艺术家 - 标题”之后"
+        );
     }
 
     #[test]
@@ -799,7 +801,10 @@ mod tests {
         let r = render("{bogus}-{title}", &tags(), MissingFieldPolicy::Empty);
         assert_eq!(r.text, "-Yesterday");
         assert_eq!(template_variables("{bogus}-{title}"), vec!["title"]);
-        assert_eq!(template_variables("{artist}-{title}-{artist}"), vec!["artist", "title"]);
+        assert_eq!(
+            template_variables("{artist}-{title}-{artist}"),
+            vec!["artist", "title"]
+        );
     }
 
     #[test]
@@ -931,7 +936,13 @@ mod tests {
             true
         ));
         assert_eq!(t.artist.as_deref(), Some("The Beatles"));
-        assert!(!replace_in_field(&mut t, TagField::Artist, "zzz", "x", true));
+        assert!(!replace_in_field(
+            &mut t,
+            TagField::Artist,
+            "zzz",
+            "x",
+            true
+        ));
         assert!(!replace_in_field(&mut t, TagField::Artist, "", "x", false));
         let mut t2 = tags();
         assert!(replace_in_field(&mut t2, TagField::Comment, "a", "b", false) == false);
@@ -943,7 +954,10 @@ mod tests {
         assert_eq!(t.artist.as_deref(), Some("The Beatles"));
         assert_eq!(t.title.as_deref(), Some("Yesterday"));
 
-        let t = guess_tags_from_filename("07 The Beatles - Yesterday.mp3", "{track:02} {artist} - {title}");
+        let t = guess_tags_from_filename(
+            "07 The Beatles - Yesterday.mp3",
+            "{track:02} {artist} - {title}",
+        );
         assert_eq!(t.track, Some(7));
         assert_eq!(t.artist.as_deref(), Some("The Beatles"));
         assert_eq!(t.title.as_deref(), Some("Yesterday"));

@@ -228,3 +228,20 @@
   background-size: 28px 100%;
   animation: stripe 0.8s linear infinite;
 }
+
+/* 不确定进度（扫描尚未拿到总数）：一条来回滑动的光带，表示“还在动”。 */
+.progress-indeterminate {
+  background-image: linear-gradient(90deg, transparent 0%, var(--accent) 45%, var(--accent) 55%, transparent 100%);
+  background-size: 40% 100%;
+  background-repeat: no-repeat;
+  animation: indeterminate 1.15s ease-in-out infinite;
+}
+
+@keyframes indeterminate {
+  from {
+    background-position: -45% 0;
+  }
+  to {
+    background-position: 145% 0;
+  }
+}

@@ -460,7 +460,9 @@ mod tests {
     /// K 加权高架滤波器必须稳定（极点在单位圆内）。
     #[test]
     fn k_weighting_is_stable() {
-        for sr in [44_100u32, 48_000, 88_200, 96_000, 176_400, 192_000, 2_822_400] {
+        for sr in [
+            44_100u32, 48_000, 88_200, 96_000, 176_400, 192_000, 2_822_400,
+        ] {
             let k = k_weighting(sr);
             for b in [k.pre, k.rlb] {
                 // |z| = sqrt(a2) < 1

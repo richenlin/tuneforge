@@ -28,9 +28,8 @@ where
         while start < len {
             let end = (start + chunk).min(len);
             let fref = &f;
-            handles.push(scope.spawn(move || {
-                (start..end).map(|i| (i, fref(i))).collect::<Vec<_>>()
-            }));
+            handles
+                .push(scope.spawn(move || (start..end).map(|i| (i, fref(i))).collect::<Vec<_>>()));
             start = end;
         }
         for h in handles {
@@ -54,9 +53,7 @@ where
             out[i] = Some(v);
         }
     }
-    out.into_iter()
-        .map(|v| v.unwrap_or_else(|| f(0)))
-        .collect()
+    out.into_iter().map(|v| v.unwrap_or_else(|| f(0))).collect()
 }
 
 #[cfg(test)]

@@ -190,7 +190,15 @@ fn stereo_gains(channels: usize) -> Vec<(f64, f64)> {
         4 => vec![(1.0, 0.0), (0.0, 1.0), (S, 0.0), (0.0, S)],
         5 => vec![(1.0, 0.0), (0.0, 1.0), (S, S), (S, 0.0), (0.0, S)],
         6 => vec![(1.0, 0.0), (0.0, 1.0), (S, S), DROP, (S, 0.0), (0.0, S)],
-        7 => vec![(1.0, 0.0), (0.0, 1.0), (S, S), DROP, (S, S), (S, 0.0), (0.0, S)],
+        7 => vec![
+            (1.0, 0.0),
+            (0.0, 1.0),
+            (S, S),
+            DROP,
+            (S, S),
+            (S, 0.0),
+            (0.0, S),
+        ],
         8 => vec![
             (1.0, 0.0),
             (0.0, 1.0),
@@ -304,9 +312,12 @@ mod tests {
         let mono = downmix_to_mono(&buf).unwrap();
         assert!(mono.sample_peak() <= 1.0 + 1e-9);
         // 相关性拉满时要“刚好顶到 0 dBFS”，而不是按系数和白白衰减
-        assert!((stereo.sample_peak() - 1.0).abs() < 1e-9, "{:.4}", stereo.sample_peak());
+        assert!(
+            (stereo.sample_peak() - 1.0).abs() < 1e-9,
+            "{:.4}",
+            stereo.sample_peak()
+        );
     }
-
 
     #[test]
     fn loud_surround_is_scaled_by_one_constant_only() {
@@ -333,14 +344,20 @@ mod tests {
         buf.channel_mut(0).iter_mut().for_each(|v| *v = 0.5);
         let out = downmix_to_stereo(&buf).unwrap();
         assert_eq!(out.channel(0), buf.channel(0), "FL 应 1:1 进入左声道");
-        assert!(out.channel(1).iter().all(|v| *v == 0.0), "FL 不得串到右声道");
+        assert!(
+            out.channel(1).iter().all(|v| *v == 0.0),
+            "FL 不得串到右声道"
+        );
 
         // 回归二：FR 同理
         let mut buf = AudioBuffer::new(48_000, 6, 64);
         buf.channel_mut(1).iter_mut().for_each(|v| *v = -0.25);
         let out = downmix_to_stereo(&buf).unwrap();
         assert_eq!(out.channel(1), buf.channel(1), "FR 应 1:1 进入右声道");
-        assert!(out.channel(0).iter().all(|v| *v == 0.0), "FR 不得串到左声道");
+        assert!(
+            out.channel(0).iter().all(|v| *v == 0.0),
+            "FR 不得串到左声道"
+        );
 
         // 单声道：只有 L 有内容时也不衰减
         let mut buf = AudioBuffer::new(48_000, 6, 64);

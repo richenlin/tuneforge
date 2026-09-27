@@ -143,9 +143,8 @@ pub fn normalize(input: &AudioBuffer, params: &NormalizeParams) -> Result<Normal
 
     if let Some(c) = ceiling {
         // 逐声道真峰值包络（线性缩放性质：envelope(x·g) = envelope(x)·g）
-        let envelopes: Vec<Vec<f64>> = map_ordered(out.channels, 24_000, |ch| {
-            filter.envelope(out.channel(ch))
-        });
+        let envelopes: Vec<Vec<f64>> =
+            map_ordered(out.channels, 24_000, |ch| filter.envelope(out.channel(ch)));
 
         let mut req = vec![1.0f64; out.frames];
         let mut needs_limiting = false;
@@ -165,7 +164,8 @@ pub fn normalize(input: &AudioBuffer, params: &NormalizeParams) -> Result<Normal
 
         if needs_limiting {
             limited = true;
-            let look_frames = ((params.lookahead_ms / 1000.0) * out.sample_rate as f64).round() as usize;
+            let look_frames =
+                ((params.lookahead_ms / 1000.0) * out.sample_rate as f64).round() as usize;
             let req_la = min_filter_forward(&req, look_frames);
             let curve = smooth_gain_curve(
                 &req_la,
@@ -347,7 +347,11 @@ mod tests {
         let out = normalize(&buf, &NormalizeParams::default()).unwrap();
         assert!(!out.limited);
         assert_eq!(out.trim_iterations, 1);
-        assert!((out.output_lufs.unwrap() + 14.0).abs() < 0.2, "{:?}", out.output_lufs);
+        assert!(
+            (out.output_lufs.unwrap() + 14.0).abs() < 0.2,
+            "{:?}",
+            out.output_lufs
+        );
         assert!(out.output_true_peak_dbtp <= -1.0 + 1e-6);
         // 立体声 -20 dBFS 正弦 ≈ -20 LUFS → 目标 -14 LUFS 需要约 +6 dB
         assert!((out.base_gain_db - 6.0).abs() < 1.0, "{}", out.base_gain_db);
@@ -517,7 +521,8 @@ mod tests {
         let slice = buf.channel_mut(0);
         for (n, v) in slice.iter_mut().enumerate() {
             let t = n as f64 / 48_000.0;
-            *v = 0.9 * (2.0 * std::f64::consts::PI * 12_000.0 * t + std::f64::consts::FRAC_PI_4).sin();
+            *v = 0.9
+                * (2.0 * std::f64::consts::PI * 12_000.0 * t + std::f64::consts::FRAC_PI_4).sin();
         }
         let (out, trim) = apply_gain_with_ceiling(&buf, 6.0, Some(-1.0));
         assert!(trim > 0.0);

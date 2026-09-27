@@ -54,7 +54,12 @@ type QueueEvent =
   | { event: "finished"; result: JobResult };
 ```
 
-`listen("job:done")` 收到 `{ jobId: string; report: JobReport }`。
+`listen("job:done")` 收到 `{ jobId: string; report: JobReport }`（`report.concurrency` = 本次实际并发度，用于界面显示）。
+
+`listen("ffmpeg:status")` 收到 `FfmpegStatus`：窗口先出图，ffmpeg 后台探测完再回推。
+
+`listen("scan:progress")` 收到 `{ done: number; total: number }`：`scan_inputs` 每探测完一个文件回推一次。
+多文件拖入时扫描可能持续数十秒，前端据此锁定界面并显示进度（`app/ui/src/components/BusyOverlay.tsx`）。
 
 ## 关键类型
 

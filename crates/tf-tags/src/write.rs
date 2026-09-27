@@ -43,7 +43,10 @@ impl WriteOptions {
     /// 表现为“播放几秒就跳到下一首”或标签乱码。无损/新式容器不受影响。
     pub fn for_output(format: AudioFormat) -> Self {
         let mut options = WriteOptions::default();
-        if matches!(format, AudioFormat::Mp3 | AudioFormat::Wav | AudioFormat::Aiff) {
+        if matches!(
+            format,
+            AudioFormat::Mp3 | AudioFormat::Wav | AudioFormat::Aiff
+        ) {
             options.id3v23 = true;
         }
         options
@@ -117,7 +120,12 @@ pub struct CopyReport {
 }
 
 /// 把源文件的标签复制到目标文件（转换流程使用）。
-pub fn copy_tags(from: &Path, to: &Path, policy: CopyPolicy, options: &WriteOptions) -> Result<CopyReport> {
+pub fn copy_tags(
+    from: &Path,
+    to: &Path,
+    policy: CopyPolicy,
+    options: &WriteOptions,
+) -> Result<CopyReport> {
     if policy == CopyPolicy::None {
         return Ok(CopyReport {
             fields_written: 0,
@@ -249,7 +257,10 @@ mod tests {
         let compat = write_minimal_wav(&dir.path().join("compat.wav"), 8000, 1, 800);
         write_tags(&compat, &tags, &WriteOptions::for_output(AudioFormat::Wav)).unwrap();
         assert_eq!(id3_major_version(&std::fs::read(&compat).unwrap()), Some(3));
-        assert_eq!(crate::read_tags(&compat).unwrap().title.as_deref(), Some("黄昏"));
+        assert_eq!(
+            crate::read_tags(&compat).unwrap().title.as_deref(),
+            Some("黄昏")
+        );
 
         // lofty 默认（v2.4）仍然是 v4，证明差异确实来自选项
         let plain = write_minimal_wav(&dir.path().join("plain.wav"), 8000, 1, 800);
@@ -260,7 +271,10 @@ mod tests {
         // 再用最大兼容选项改写——必须降级为 v2.3 且字段不丢
         write_tags(&plain, &tags, &WriteOptions::for_output(AudioFormat::Wav)).unwrap();
         assert_eq!(id3_major_version(&std::fs::read(&plain).unwrap()), Some(3));
-        assert_eq!(crate::read_tags(&plain).unwrap().artist.as_deref(), Some("周传雄"));
+        assert_eq!(
+            crate::read_tags(&plain).unwrap().artist.as_deref(),
+            Some("周传雄")
+        );
     }
 
     #[test]
@@ -288,12 +302,20 @@ mod tests {
             ..Tags::default()
         };
         write_tags(&from, &tags, &WriteOptions::for_output(AudioFormat::Wav)).unwrap();
-        let cover = tf_core::model::CoverArt::new("image/png", vec![0x89, 0x50, 0x4E, 0x47, 1, 2, 3, 4]);
-        crate::cover::set_cover_with(&from, Some(&cover), &WriteOptions::for_output(AudioFormat::Wav))
-            .unwrap();
+        let cover =
+            tf_core::model::CoverArt::new("image/png", vec![0x89, 0x50, 0x4E, 0x47, 1, 2, 3, 4]);
+        crate::cover::set_cover_with(
+            &from,
+            Some(&cover),
+            &WriteOptions::for_output(AudioFormat::Wav),
+        )
+        .unwrap();
         assert_eq!(id3_major_version(&std::fs::read(&from).unwrap()), Some(3));
         // ID3v2.3 + 中文标题必须能读回来（v2.3 里非 Latin-1 文本走 UTF-16）
-        assert_eq!(crate::read_tags(&from).unwrap().title.as_deref(), Some("黄昏"));
+        assert_eq!(
+            crate::read_tags(&from).unwrap().title.as_deref(),
+            Some("黄昏")
+        );
 
         let report = copy_tags(
             &from,
@@ -305,8 +327,15 @@ mod tests {
         assert!(report.cover_written);
         // 写封面这一步不能把标签改回 ID3v2.4
         let bytes = std::fs::read(&to).unwrap();
-        assert_eq!(id3_major_version(&bytes), Some(3), "copy_tags 写封面后应为 ID3v2.3");
-        assert_eq!(crate::read_tags(&to).unwrap().artist.as_deref(), Some("周传雄"));
+        assert_eq!(
+            id3_major_version(&bytes),
+            Some(3),
+            "copy_tags 写封面后应为 ID3v2.3"
+        );
+        assert_eq!(
+            crate::read_tags(&to).unwrap().artist.as_deref(),
+            Some("周传雄")
+        );
         assert_eq!(
             crate::read_first_cover(&to).unwrap().map(|c| c.data),
             Some(vec![0x89, 0x50, 0x4E, 0x47, 1, 2, 3, 4])

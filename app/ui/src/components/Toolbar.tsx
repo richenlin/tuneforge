@@ -11,6 +11,7 @@ export function Toolbar() {
   const {
     items,
     scan,
+    scanning,
     clearList,
     removeItems,
     selected,
@@ -31,14 +32,17 @@ export function Toolbar() {
       .onDragDropEvent((event) => {
         const payload = event.payload;
         if (payload.type === "enter") {
-          setDragging(true);
-          setDropCount(payload.paths.length);
+          // 扫描中不再接管拖放（store 会拦下并提示），避免用户以为新拖入“没生效”
+          if (!scanning) {
+            setDragging(true);
+            setDropCount(payload.paths.length);
+          }
         } else if (payload.type === "over") {
-          setDragging(true);
+          if (!scanning) setDragging(true);
         } else if (payload.type === "drop") {
           setDragging(false);
           if (payload.paths.length > 0) void scan(payload.paths, recursive);
-          else notify("error", "拖入的内容没有可读取的路径");
+          else if (!scanning) notify("error", "拖入的内容没有可读取的路径");
         } else {
           setDragging(false);
         }
@@ -52,7 +56,7 @@ export function Toolbar() {
       cancelled = true;
       dispose?.();
     };
-  }, [notify, recursive, scan]);
+  }, [notify, recursive, scan, scanning]);
 
   const addFolder = async () => {
     const picked = await openDialog({ directory: true, multiple: true, title: "选择音乐文件夹" });
@@ -74,21 +78,24 @@ export function Toolbar() {
     }
   };
 
+  /** 扫描/探测中也算忙：按钮与列表操作一并锁住。 */
+  const locked = busy || scanning;
+
   return (
     <>
       <div className="flex shrink-0 flex-wrap items-center gap-2.5 border-b border-line bg-surface-2/60 px-4 py-2.5">
         <Button
           variant="primary"
           icon="folderPlus"
-          loading={busy}
-          disabled={!ffmpegReady}
+          loading={locked}
+          disabled={!ffmpegReady || scanning}
           onClick={() => void withBusy(addFolder)}
         >
           添加文件夹
         </Button>
         <Button
           icon="filePlus"
-          disabled={!ffmpegReady || busy}
+          disabled={!ffmpegReady || locked}
           onClick={() => void withBusy(addFiles)}
         >
           添加文件
@@ -101,20 +108,20 @@ export function Toolbar() {
             icon="trash"
             title="移除选中（仅从列表移除）"
             size="sm"
-            disabled={selected.length === 0}
+            disabled={selected.length === 0 || locked}
             onClick={() => void removeItems(selected)}
           />
           <IconButton
             icon="x"
             title="清空列表"
             size="sm"
-            disabled={items.length === 0}
+            disabled={items.length === 0 || locked}
             onClick={() => void clearList()}
           />
         </div>
       </div>
 
-      {dragging && (
+      {dragging && !scanning && (
         <div className="pointer-events-none fixed inset-2 z-50 grid place-items-center rounded-2xl border-2 border-dashed border-accent/60 bg-accent/[0.08] backdrop-blur-sm">
           <div className="flex flex-col items-center gap-3 text-accent">
             <span className="grid h-16 w-16 place-items-center rounded-2xl bg-accent/15 ring-1 ring-accent/40">

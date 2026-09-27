@@ -249,6 +249,9 @@ export function JobBar({
             {stats.cancelled > 0 && <Stat label="取消" value={stats.cancelled} icon="stop" />}
             <Stat label="输出" value={formatBytes(stats.bytes)} icon="download" />
             {report && <Stat label="耗时" value={formatDuration(report.elapsedMs / 1000)} icon="clock" />}
+            {report && report.concurrency > 0 && (
+              <Stat label="并发" value={report.concurrency} icon="convert" />
+            )}
             <button
               type="button"
               onClick={() => setResultsOpen((v) => !v)}

@@ -236,7 +236,8 @@ mod tests {
     #[test]
     fn missing_binaries_produce_actionable_error() {
         // 关闭 PATH 回退，避免开发机/CI 装了 ffmpeg 时结果飘
-        let err = discover_opts(None, &[PathBuf::from("C:/definitely/missing")], false).unwrap_err();
+        let err =
+            discover_opts(None, &[PathBuf::from("C:/definitely/missing")], false).unwrap_err();
         assert_eq!(err.category(), tf_core::ErrorCategory::Unsupported);
         assert!(err.to_string().contains("ffmpeg"));
     }

@@ -5,6 +5,7 @@ import { api } from "./api";
 import { useApp } from "./store";
 import type { AppInfo, PageId } from "./types";
 import { applyTheme, getStoredTheme, type Theme } from "./theme";
+import { BusyOverlay } from "./components/BusyOverlay";
 import { FfmpegBanner } from "./components/FfmpegBanner";
 import { FileList } from "./components/FileList";
 import { JobBar } from "./components/JobBar";
@@ -121,9 +122,21 @@ function FfmpegStatusChip() {
 }
 
 export function App() {
-  const { page, setPage, buildRequest, items, toast, dismissToast } = useApp();
+  const { page, setPage, buildRequest, items, toast, dismissToast, scanning, scanTargets, scanProgress } =
+    useApp();
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [theme, setTheme] = useState<Theme>(() => getStoredTheme());
+  // 单个小文件扫描往往几十毫秒就结束：延迟一小会儿再铺遮罩，避免无意义的闪烁。
+  const [showScanOverlay, setShowScanOverlay] = useState(false);
+
+  useEffect(() => {
+    if (!scanning) {
+      setShowScanOverlay(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setShowScanOverlay(true), 150);
+    return () => window.clearTimeout(timer);
+  }, [scanning]);
 
   useEffect(() => {
     void (async () => {
@@ -218,8 +231,17 @@ export function App() {
         <span className="truncate">{info?.notes?.join("　·　") ?? "只读源文件，结果输出到新文件夹"}</span>
       </footer>
 
+      {showScanOverlay && (
+        <BusyOverlay
+          title="正在扫描并读取元数据…"
+          hint="拖入的文件需要逐个调用 ffprobe 探测格式/响度信息，文件越多耗时越久；完成后会自动出现在列表中。"
+          count={scanTargets}
+          progress={scanProgress}
+        />
+      )}
+
       {toast && (
-        <div className="pointer-events-none fixed bottom-24 left-1/2 z-50 -translate-x-1/2">
+        <div className="pointer-events-none fixed bottom-24 left-1/2 z-[70] -translate-x-1/2">
           <button
             type="button"
             onClick={dismissToast}

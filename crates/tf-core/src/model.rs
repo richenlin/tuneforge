@@ -212,17 +212,21 @@ impl std::fmt::Display for AudioFormat {
 }
 
 impl Serialize for AudioFormat {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
         serializer.serialize_str(self.id())
     }
 }
 
 impl<'de> Deserialize<'de> for AudioFormat {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
         let raw = String::deserialize(deserializer)?;
-        AudioFormat::from_id(&raw).ok_or_else(|| {
-            serde::de::Error::custom(format!("未知音频格式 id: {raw}"))
-        })
+        AudioFormat::from_id(&raw)
+            .ok_or_else(|| serde::de::Error::custom(format!("未知音频格式 id: {raw}")))
     }
 }
 
@@ -449,8 +453,8 @@ impl SourceRating {
         if !format.is_lossless() {
             return Some(SourceRating::Lossy);
         }
-        let hires = media.sample_rate.unwrap_or(0) > 48_000
-            || media.bits_per_sample.unwrap_or(0) > 16;
+        let hires =
+            media.sample_rate.unwrap_or(0) > 48_000 || media.bits_per_sample.unwrap_or(0) > 16;
         Some(if hires {
             SourceRating::HiRes
         } else {
@@ -569,7 +573,11 @@ impl AudioBuffer {
     }
 
     /// 从交织的 `f32` PCM 构造（FFmpeg `f32le` 输出）。
-    pub fn from_interleaved_f32(sample_rate: u32, channels: usize, interleaved: &[f32]) -> Result<Self> {
+    pub fn from_interleaved_f32(
+        sample_rate: u32,
+        channels: usize,
+        interleaved: &[f32],
+    ) -> Result<Self> {
         if channels == 0 {
             return Err(TfError::Input("声道数不能为 0".into()));
         }
@@ -719,12 +727,18 @@ mod tests {
         // `m4a` 同时用于 ALAC 与 AAC，扩展名只对无歧义格式做双向校验
         for f in AudioFormat::ALL {
             if f == AudioFormat::Aac {
-                assert_eq!(AudioFormat::from_extension(f.extension()), Some(AudioFormat::Alac));
+                assert_eq!(
+                    AudioFormat::from_extension(f.extension()),
+                    Some(AudioFormat::Alac)
+                );
                 continue;
             }
             assert_eq!(AudioFormat::from_extension(f.extension()), Some(f));
         }
-        assert_eq!(AudioFormat::from_extension(".FLAC"), Some(AudioFormat::Flac));
+        assert_eq!(
+            AudioFormat::from_extension(".FLAC"),
+            Some(AudioFormat::Flac)
+        );
         assert_eq!(AudioFormat::from_id("bogus"), None);
     }
 
@@ -750,7 +764,10 @@ mod tests {
             AudioFormat::from_probe("aiff", "pcm_s16be"),
             Some(AudioFormat::Aiff)
         );
-        assert_eq!(AudioFormat::from_probe("dsf", "dsd_lsbf"), Some(AudioFormat::Dsf));
+        assert_eq!(
+            AudioFormat::from_probe("dsf", "dsd_lsbf"),
+            Some(AudioFormat::Dsf)
+        );
         assert_eq!(AudioFormat::from_probe("", "monkey"), None);
     }
 
@@ -777,8 +794,14 @@ mod tests {
         let interleaved: Vec<f32> = vec![0.1, -0.1, 0.2, -0.2, 0.3, -0.3];
         let buf = AudioBuffer::from_interleaved_f32(48_000, 2, &interleaved).unwrap();
         assert_eq!(buf.frames, 3);
-        assert_eq!(buf.channel(0), &[0.1f32 as f64, 0.2f32 as f64, 0.3f32 as f64]);
-        assert_eq!(buf.channel(1), &[-0.1f32 as f64, -0.2f32 as f64, -0.3f32 as f64]);
+        assert_eq!(
+            buf.channel(0),
+            &[0.1f32 as f64, 0.2f32 as f64, 0.3f32 as f64]
+        );
+        assert_eq!(
+            buf.channel(1),
+            &[-0.1f32 as f64, -0.2f32 as f64, -0.3f32 as f64]
+        );
         assert_eq!(buf.to_interleaved_f32(), interleaved);
     }
 
@@ -799,7 +822,9 @@ mod tests {
     #[test]
     fn tag_field_get_set_roundtrip() {
         let mut tags = Tags::default();
-        TagField::Title.set(&mut tags, Some(" 歌名 ".into())).unwrap();
+        TagField::Title
+            .set(&mut tags, Some(" 歌名 ".into()))
+            .unwrap();
         TagField::Track.set(&mut tags, Some("7".into())).unwrap();
         assert_eq!(tags.title.as_deref(), Some("歌名"));
         assert_eq!(tags.track, Some(7));
@@ -867,7 +892,10 @@ mod tests {
             Some(SourceRating::Lossless)
         );
         media.format = Some(AudioFormat::Ape);
-        assert_eq!(SourceRating::from_media(&media), Some(SourceRating::Lossless));
+        assert_eq!(
+            SourceRating::from_media(&media),
+            Some(SourceRating::Lossless)
+        );
         media.format = Some(AudioFormat::Mp3);
         assert_eq!(SourceRating::from_media(&media), Some(SourceRating::Lossy));
         media.format = Some(AudioFormat::Dsf);

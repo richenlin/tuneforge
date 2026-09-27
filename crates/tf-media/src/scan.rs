@@ -78,7 +78,9 @@ mod tests {
     #[test]
     fn extension_list_covers_design_formats() {
         let exts = audio_extensions();
-        for e in ["flac", "wav", "aiff", "m4a", "mp3", "ogg", "opus", "ape", "dsf", "dff", "wv"] {
+        for e in [
+            "flac", "wav", "aiff", "m4a", "mp3", "ogg", "opus", "ape", "dsf", "dff", "wv",
+        ] {
             assert!(exts.contains(&e), "缺少扩展名 {e}");
         }
     }

@@ -139,6 +139,16 @@ pub struct FormatOption {
     pub default_quality: String,
 }
 
+/// 扫描/探测进度（`scan:progress`），多文件拖入时前端据此锁定界面并显示进度。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanProgress {
+    /// 已探测完成的文件数。
+    pub done: usize,
+    /// 本轮待探测的文件总数。
+    pub total: usize,
+}
+
 /// 响度测量行。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -208,7 +218,11 @@ impl From<ConvertConfigDto> for ConvertConfig {
 /// 发送 camelCase 字段名（如 `outputDir`），Tauri 只会对命令的**顶层参数名**做
 /// camelCase → snake_case 映射，嵌套结构体由 serde 负责。
 #[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "page", rename_all = "snake_case", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "page",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum JobRequest {
     /// 转换页。
     Convert {
@@ -377,7 +391,8 @@ mod tests {
             "bitDepth": 24,
             "keepTags": true
         });
-        let request: JobRequest = serde_json::from_value(json).expect("camelCase 归一化请求应可解析");
+        let request: JobRequest =
+            serde_json::from_value(json).expect("camelCase 归一化请求应可解析");
         match request {
             JobRequest::Normalize { params, .. } => assert_eq!(params.target_lufs, -14.0),
             other => panic!("期望 Normalize，得到 {other:?}"),
@@ -401,7 +416,8 @@ mod tests {
             },
             "ids": []
         });
-        let request: JobRequest = serde_json::from_value(json).expect("camelCase 重命名请求应可解析");
+        let request: JobRequest =
+            serde_json::from_value(json).expect("camelCase 重命名请求应可解析");
         match request {
             JobRequest::Rename { sanitize, .. } => {
                 assert!(sanitize.collapse_spaces);

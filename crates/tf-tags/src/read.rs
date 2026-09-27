@@ -207,11 +207,18 @@ mod tests {
 
             apply_tags_to_lofty(&mut tag, &keep);
             let back = tags_from_lofty(&tag);
-            assert_eq!(back, keep.clone().normalized(), "仅保留艺术家 / 标题: {tag_type:?}");
+            assert_eq!(
+                back,
+                keep.clone().normalized(),
+                "仅保留艺术家 / 标题: {tag_type:?}"
+            );
 
             // 直接查底层标签，确认不是只清了内存视图
             assert!(tag.get_string(&ItemKey::Comment).is_none(), "{tag_type:?}");
-            assert!(tag.get_string(&ItemKey::AlbumArtist).is_none(), "{tag_type:?}");
+            assert!(
+                tag.get_string(&ItemKey::AlbumArtist).is_none(),
+                "{tag_type:?}"
+            );
             assert!(tag.album().is_none(), "{tag_type:?}");
             assert!(tag.genre().is_none(), "{tag_type:?}");
             assert!(tag.track().is_none(), "{tag_type:?}");

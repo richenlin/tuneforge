@@ -15,6 +15,7 @@ use tf_core::model::AudioBuffer;
 use tf_media::{decode, encode, probe, EncodeSpec, FfmpegPaths, MediaProgress};
 use tf_tags::{copy_tags, set_cover_with, write_tags, CopyPolicy, WriteOptions};
 
+use crate::memory::{estimate_buffer_bytes, MemoryGate, MemoryPermit};
 use crate::plan::{ChannelMode, CoverAction, Job, JobPayload};
 use crate::queue::{JobContext, LogLevel, Reporter};
 
@@ -41,12 +42,21 @@ pub struct FfmpegPipeline {
     paths: FfmpegPaths,
     /// 当前 ffmpeg 是否支持 soxr（需要重采样时用它做高质量转换）。
     soxr: bool,
+    /// 单个 ffmpeg 子进程可用的线程数（`None` = 让 ffmpeg 自定）。
+    threads: Option<usize>,
+    /// 内存闸门：限制同时在内存里展开的文件数（DSP 路径）。
+    memory: Arc<MemoryGate>,
 }
 
 impl FfmpegPipeline {
     /// 用已定位的 ffmpeg 路径构造（默认不启用 soxr）。
     pub fn new(paths: FfmpegPaths) -> Self {
-        FfmpegPipeline { paths, soxr: false }
+        FfmpegPipeline {
+            paths,
+            soxr: false,
+            threads: None,
+            memory: Arc::new(MemoryGate::default()),
+        }
     }
 
     /// 按能力快照构造：带 libsoxr 的构建会启用高质量重采样。
@@ -54,7 +64,40 @@ impl FfmpegPipeline {
         FfmpegPipeline {
             soxr: tf_media::has_soxr(caps),
             paths,
+            threads: None,
+            memory: Arc::new(MemoryGate::default()),
         }
+    }
+
+    /// 设置单个子进程的线程预算（一般来自 `QueueRunner::child_thread_budget()`）。
+    pub fn with_threads(mut self, threads: Option<usize>) -> Self {
+        self.threads = threads;
+        self
+    }
+
+    /// 设置 DSP 路径的内存预算（`0` 表示用默认值）。
+    pub fn with_memory_budget(mut self, bytes: u64) -> Self {
+        self.memory = Arc::new(MemoryGate::new(bytes));
+        self
+    }
+
+    /// 当前内存预算（字节）。
+    pub fn memory_budget(&self) -> u64 {
+        self.memory.budget()
+    }
+
+    /// 编码子进程选项。
+    fn encode_options(&self) -> encode::EncodeOptions {
+        encode::EncodeOptions {
+            soxr: self.soxr,
+            threads: self.threads,
+        }
+    }
+
+    /// 预约「整首曲子展开到内存」的预算，返回的守卫在作用域结束时释放。
+    fn reserve_memory(&self, media: &tf_core::model::MediaInfo) -> MemoryPermit {
+        let bytes = estimate_buffer_bytes(media.duration_secs, media.sample_rate, media.channels);
+        self.memory.acquire(bytes)
     }
 
     /// ffmpeg 路径。
@@ -123,8 +166,11 @@ impl FfmpegPipeline {
         ) {
             let opts = decode::DecodeOptions {
                 source_duration_secs: duration,
+                threads: self.threads,
                 ..Default::default()
             };
+            // 整首曲子要展开到内存：先按预算预约，避免多文件同时抢内存。
+            let _memory = self.reserve_memory(&media);
             ctx.reporter.progress(0.0, "解码");
             let mut buffer = decode::decode_to_buffer(
                 &self.paths,
@@ -151,7 +197,12 @@ impl FfmpegPipeline {
                 }
             }
 
-            self.apply_dither(&mut buffer, spec.bit_depth, media.bits_per_sample, &mut note_parts);
+            self.apply_dither(
+                &mut buffer,
+                spec.bit_depth,
+                media.bits_per_sample,
+                &mut note_parts,
+            );
 
             ctx.reporter.progress(0.0, "编码");
             encode::encode_buffer(
@@ -160,7 +211,7 @@ impl FfmpegPipeline {
                 &buffer,
                 target,
                 duration,
-                self.soxr,
+                self.encode_options(),
                 Some(Self::progress_callback(&ctx.reporter)),
             )?;
         } else if encode::can_stream_copy(&media, spec) {
@@ -183,7 +234,7 @@ impl FfmpegPipeline {
                 target,
                 duration,
                 false,
-                self.soxr,
+                self.encode_options(),
                 Some(Self::progress_callback(&ctx.reporter)),
             )?;
         }
@@ -217,10 +268,8 @@ impl FfmpegPipeline {
     ) -> Result<AudioBuffer> {
         let mut buffer = buffer;
         if downmix_fake && downmix::is_fake_multichannel(&buffer) {
-            let report = downmix::detect_fake_multichannel(
-                &buffer,
-                downmix::DEFAULT_SILENCE_THRESHOLD_DBFS,
-            );
+            let report =
+                downmix::detect_fake_multichannel(&buffer, downmix::DEFAULT_SILENCE_THRESHOLD_DBFS);
             notes.push(format!("假多声道折混（{}）", report.channels));
             buffer = downmix::downmix_fake_multichannel(&buffer)?;
         }
@@ -269,13 +318,17 @@ impl FfmpegPipeline {
         let mut warnings = Vec::new();
 
         ctx.reporter.progress(0.0, "解码");
+        let opts = decode::DecodeOptions {
+            source_duration_secs: duration,
+            threads: self.threads,
+            ..Default::default()
+        };
+        // 整首曲子要展开到内存：先按预算预约，避免多文件同时抢内存。
+        let _memory = self.reserve_memory(&media);
         let buffer = decode::decode_to_buffer(
             &self.paths,
             &job.input,
-            &decode::DecodeOptions {
-                source_duration_secs: duration,
-                ..Default::default()
-            },
+            &opts,
             Some(Self::progress_callback(&ctx.reporter)),
         )?;
         ctx.ensure_not_cancelled()?;
@@ -316,7 +369,7 @@ impl FfmpegPipeline {
             &out,
             target,
             duration,
-            self.soxr,
+            self.encode_options(),
             Some(Self::progress_callback(&ctx.reporter)),
         )?;
 
@@ -410,8 +463,7 @@ fn copy_file(from: &Path, to: &Path) -> Result<u64> {
     if !from.is_file() {
         return Err(TfError::Input(format!("文件不存在：{}", from.display())));
     }
-    std::fs::copy(from, to)
-        .map_err(|e| TfError::Io(format!("复制 {} 失败：{e}", from.display())))
+    std::fs::copy(from, to).map_err(|e| TfError::Io(format!("复制 {} 失败：{e}", from.display())))
 }
 
 #[cfg(test)]
@@ -434,12 +486,9 @@ mod tests {
     /// 显式关闭 PATH 回退：否则本用例会随开发机/CI 是否装了 ffmpeg 而飘。
     #[test]
     fn discover_without_binaries_reports_unsupported() {
-        let err = tf_media::locate::discover_opts(
-            None,
-            &[std::path::PathBuf::from("C:/missing")],
-            false,
-        )
-        .unwrap_err();
+        let err =
+            tf_media::locate::discover_opts(None, &[std::path::PathBuf::from("C:/missing")], false)
+                .unwrap_err();
         assert_eq!(err.category(), tf_core::ErrorCategory::Unsupported);
     }
 
@@ -452,20 +501,74 @@ mod tests {
             channels: None,
             quality: tf_media::EncodeQuality::FlacLevel { level: 8 },
         };
-        assert!(!FfmpegPipeline::needs_dsp(ChannelMode::Keep, None, false, &lossless, Some(16)));
-        assert!(FfmpegPipeline::needs_dsp(ChannelMode::Stereo, None, false, &lossless, Some(16)));
-        assert!(FfmpegPipeline::needs_dsp(ChannelMode::Keep, Some(3.0), false, &lossless, Some(16)));
-        assert!(FfmpegPipeline::needs_dsp(ChannelMode::Keep, None, true, &lossless, Some(16)));
+        assert!(!FfmpegPipeline::needs_dsp(
+            ChannelMode::Keep,
+            None,
+            false,
+            &lossless,
+            Some(16)
+        ));
+        assert!(FfmpegPipeline::needs_dsp(
+            ChannelMode::Stereo,
+            None,
+            false,
+            &lossless,
+            Some(16)
+        ));
+        assert!(FfmpegPipeline::needs_dsp(
+            ChannelMode::Keep,
+            Some(3.0),
+            false,
+            &lossless,
+            Some(16)
+        ));
+        assert!(FfmpegPipeline::needs_dsp(
+            ChannelMode::Keep,
+            None,
+            true,
+            &lossless,
+            Some(16)
+        ));
 
         // 降位深必须走 DSP（否则到 ffmpeg 那里是不抖动地硬截断）
-        let down16 = EncodeSpec { bit_depth: Some(16), ..lossless.clone() };
-        assert!(FfmpegPipeline::needs_dsp(ChannelMode::Keep, None, false, &down16, Some(24)));
+        let down16 = EncodeSpec {
+            bit_depth: Some(16),
+            ..lossless.clone()
+        };
+        assert!(FfmpegPipeline::needs_dsp(
+            ChannelMode::Keep,
+            None,
+            false,
+            &down16,
+            Some(24)
+        ));
         // 升位深 / 同位深不需要 DSP
-        let up24 = EncodeSpec { bit_depth: Some(24), ..lossless.clone() };
-        assert!(!FfmpegPipeline::needs_dsp(ChannelMode::Keep, None, false, &up24, Some(16)));
-        assert!(!FfmpegPipeline::needs_dsp(ChannelMode::Keep, None, false, &up24, Some(24)));
+        let up24 = EncodeSpec {
+            bit_depth: Some(24),
+            ..lossless.clone()
+        };
+        assert!(!FfmpegPipeline::needs_dsp(
+            ChannelMode::Keep,
+            None,
+            false,
+            &up24,
+            Some(16)
+        ));
+        assert!(!FfmpegPipeline::needs_dsp(
+            ChannelMode::Keep,
+            None,
+            false,
+            &up24,
+            Some(24)
+        ));
         // 源位深未知时不强行走 DSP（无法判断是否降位深）
-        assert!(!FfmpegPipeline::needs_dsp(ChannelMode::Keep, None, false, &down16, None));
+        assert!(!FfmpegPipeline::needs_dsp(
+            ChannelMode::Keep,
+            None,
+            false,
+            &down16,
+            None
+        ));
         // 有损目标不因位深进 DSP（编码器内部为浮点/感知编码）
         let lossy = EncodeSpec {
             format: tf_core::model::AudioFormat::Mp3,
@@ -474,7 +577,13 @@ mod tests {
             channels: None,
             quality: tf_media::EncodeQuality::Mp3Vbr { q: 0 },
         };
-        assert!(!FfmpegPipeline::needs_dsp(ChannelMode::Keep, None, false, &lossy, Some(24)));
+        assert!(!FfmpegPipeline::needs_dsp(
+            ChannelMode::Keep,
+            None,
+            false,
+            &lossy,
+            Some(24)
+        ));
     }
 
     #[test]
@@ -526,9 +635,12 @@ mod tests {
             source: tf_media::LocateSource::Path,
         });
         let mut buf = AudioBuffer::new(48_000, 1, 1000);
-        buf.channel_mut(0).iter_mut().enumerate().for_each(|(i, v)| {
-            *v = (i as f64 / 1000.0) * 0.5;
-        });
+        buf.channel_mut(0)
+            .iter_mut()
+            .enumerate()
+            .for_each(|(i, v)| {
+                *v = (i as f64 / 1000.0) * 0.5;
+            });
         let mut notes = Vec::new();
         pipeline.apply_dither(&mut buf, Some(16), Some(24), &mut notes);
         assert_eq!(notes.len(), 1);
