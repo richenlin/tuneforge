@@ -1,0 +1,18 @@
+[package]
+name = "tf-media"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+tf-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+walkdir.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+tf-core = { workspace = true }

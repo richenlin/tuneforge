@@ -1,0 +1,33 @@
+{
+  "name": "tuneforge-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Tuneforge 前端（React + TypeScript + Vite + TailwindCSS）",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2",
+    "@tauri-apps/plugin-opener": "^2",
+    "react": "^19",
+    "react-dom": "^19"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4",
+    "@tauri-apps/cli": "^2",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^5",
+    "tailwindcss": "^4",
+    "typescript": "^5",
+    "vite": "^7"
+  }
+}

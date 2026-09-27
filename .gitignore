@@ -1,0 +1,11 @@
+target/
+**/node_modules
+/app/ui/dist
+/app/src-tauri/binaries/*.exe
+/app/src-tauri/gen
+*.log
+.DS_Store
+Thumbs.db
+Desktop.ini
+.env
+.env.*

@@ -1,0 +1,18 @@
+[package]
+name = "tf-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = []
+# 暴露 `util::sine_mono` 等测试信号生成器给其它 crate 的集成测试使用
+test-signals = []
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

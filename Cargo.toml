@@ -1,0 +1,43 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/tf-core",
+    "crates/tf-media",
+    "crates/tf-tags",
+    "crates/tf-jobs",
+    "app/src-tauri",
+]
+default-members = [
+    "crates/tf-core",
+    "crates/tf-media",
+    "crates/tf-tags",
+    "crates/tf-jobs",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+license = "MIT OR Apache-2.0"
+authors = ["Tuneforge"]
+
+[workspace.dependencies]
+tf-core = { path = "crates/tf-core" }
+tf-media = { path = "crates/tf-media" }
+tf-tags = { path = "crates/tf-tags" }
+tf-jobs = { path = "crates/tf-jobs" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+walkdir = "2"
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+lofty = "0.22"
+anyhow = "1"
+base64 = "0.22"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

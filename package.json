@@ -1,0 +1,14 @@
+{
+  "name": "tuneforge-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "description": "仓库根便捷入口：真正的 npm 工程在 app/（Tauri 壳）与 app/ui（前端）",
+  "scripts": {
+    "dev": "npm --prefix app run dev",
+    "build": "npm --prefix app run build",
+    "typecheck": "npm --prefix app/ui run typecheck",
+    "tauri": "npm --prefix app run tauri",
+    "tauri:dev": "npm --prefix app run tauri:dev",
+    "tauri:build": "npm --prefix app run tauri:build"
+  }
+}

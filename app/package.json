@@ -1,0 +1,16 @@
+{
+  "name": "tuneforge-app",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Tuneforge 桌面应用（Tauri 壳 + 前端构建入口）",
+  "scripts": {
+    "dev": "npm --prefix ui run dev",
+    "build": "npm --prefix ui run build",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

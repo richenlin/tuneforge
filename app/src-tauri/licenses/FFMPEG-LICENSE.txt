@@ -1,0 +1,21 @@
+FFmpeg 与 FFprobe
+===================
+
+Tuneforge 以独立进程调用 FFmpeg 与 FFprobe，没有把它们静态链接进 Tuneforge。
+
+这两份程序采用 GNU Lesser General Public License 2.1 或更高版本：
+
+https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
+
+Tuneforge 项目下载的是 BtbN/FFmpeg-Builds 的 LGPL 构建：
+
+https://github.com/BtbN/FFmpeg-Builds
+
+FFmpeg 上游源码：
+
+https://ffmpeg.org/download.html
+https://git.ffmpeg.org/ffmpeg.git
+
+安装包或发布说明中的 FFmpeg 构建文件名，对应该次构建的源码。需要源码时，按该文件名到上述地址获取。
+
+Tuneforge 自身的代码另行许可以 MIT OR Apache-2.0 提供，不改变 FFmpeg 的许可证。

@@ -1,0 +1,230 @@
+@import "tailwindcss";
+
+/* ------------------------------------------------------------------ 语义令牌 */
+/* 所有组件只使用语义色（app / surface / line / ink / accent），主题切换只改这里的变量。 */
+
+:root {
+  color-scheme: light;
+
+  --app: #eef1f8;
+  --app-glow-1: rgba(99, 102, 241, 0.12);
+  --app-glow-2: rgba(14, 165, 233, 0.12);
+
+  --surface: #ffffff;
+  --surface-2: #f6f8fc;
+  --surface-3: #eceff7;
+  --surface-inset: #f2f5fa;
+
+  --line: #e2e7f0;
+  --line-2: #cbd4e2;
+
+  --ink: #0f172a;
+  --ink-2: #4a5568;
+  --ink-3: #667085;
+
+  --accent: #0369a1;
+  --accent-fill-1: #0284c7;
+  --accent-fill-2: #075985;
+  --accent-fg: #ffffff;
+  --accent-soft: rgba(2, 132, 199, 0.09);
+
+  --iris: #6366f1;
+  --iris-soft: rgba(99, 102, 241, 0.1);
+  --mint: #059669;
+  --mint-soft: rgba(5, 150, 105, 0.1);
+  --amber: #b45309;
+  --amber-soft: rgba(180, 83, 9, 0.1);
+  --rose: #dc2626;
+  --rose-soft: rgba(220, 38, 38, 0.09);
+
+  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.05), 0 1px 3px rgba(15, 23, 42, 0.04);
+  --shadow-pop: 0 16px 40px -16px rgba(15, 23, 42, 0.28);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* 黑 / 灰 背景色阶（无蓝调） */
+  --app: #0a0a0a;
+  --app-glow-1: rgba(255, 255, 255, 0.045);
+  --app-glow-2: rgba(255, 255, 255, 0.03);
+
+  --surface: #121212;
+  --surface-2: #191919;
+  --surface-3: #232323;
+  --surface-inset: #0e0e0e;
+
+  --line: #2a2a2a;
+  --line-2: #3d3d3d;
+
+  --ink: #f0f0f0;
+  --ink-2: #b0b0b0;
+  --ink-3: #828282;
+
+  --accent: #e6e6e6;
+  --accent-fill-1: #f5f5f5;
+  --accent-fill-2: #c9c9c9;
+  --accent-fg: #0d0d0d;
+  --accent-soft: rgba(255, 255, 255, 0.09);
+
+  --iris: #d9d9d9;
+  --iris-soft: rgba(255, 255, 255, 0.07);
+  --mint: #6ee7a8;
+  --mint-soft: rgba(110, 231, 168, 0.13);
+  --amber: #f5c451;
+  --amber-soft: rgba(245, 196, 81, 0.13);
+  --rose: #f08a8a;
+  --rose-soft: rgba(240, 138, 138, 0.13);
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.6), inset 0 1px 0 0 rgba(255, 255, 255, 0.04);
+  --shadow-pop: 0 20px 48px -20px rgba(0, 0, 0, 0.85);
+}
+
+/* 把语义变量暴露给 Tailwind（inline：utilities 直接引用 var()，可运行时换肤） */
+@theme inline {
+  --color-app: var(--app);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-surface-inset: var(--surface-inset);
+
+  --color-line: var(--line);
+  --color-line-2: var(--line-2);
+
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+
+  --color-accent: var(--accent);
+  --color-accent-fill-1: var(--accent-fill-1);
+  --color-accent-fill-2: var(--accent-fill-2);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-soft: var(--accent-soft);
+
+  --color-iris: var(--iris);
+  --color-mint: var(--mint);
+  --color-amber-ink: var(--amber);
+  --color-rose-ink: var(--rose);
+
+  --font-mono: "JetBrains Mono", "Cascadia Mono", "Consolas", ui-monospace, monospace;
+
+  --animate-rise: rise 0.18s ease-out;
+  --animate-fade: fade 0.2s ease-out;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes stripe {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 28px 0;
+  }
+}
+
+/* ------------------------------------------------------------------ 基础 */
+/* 注意：必须放在 @layer base 内，否则未分层样式会压过 Tailwind 的 utilities。 */
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+  }
+
+  body {
+    font-family: "Inter", "Segoe UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+    font-size: 13px;
+    background: var(--app);
+    color: var(--ink);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* 工作台光晕（浅色下很淡，深色下更明显） */
+  #root::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(880px 420px at 6% -12%, var(--app-glow-1), transparent 70%),
+      radial-gradient(760px 420px at 104% 110%, var(--app-glow-2), transparent 70%);
+  }
+
+  ::selection {
+    background: var(--accent-soft);
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-2) transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: var(--line-2);
+    border: 3px solid transparent;
+    background-clip: content-box;
+    border-radius: 999px;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: var(--ink-3);
+    background-clip: content-box;
+  }
+
+  input[type="number"] {
+    appearance: textfield;
+  }
+
+  input[type="number"]::-webkit-outer-spin-button,
+  input[type="number"]::-webkit-inner-spin-button {
+    appearance: none;
+    margin: 0;
+  }
+
+  input,
+  select,
+  button {
+    font: inherit;
+    color: inherit;
+  }
+
+  input[type="checkbox"] {
+    accent-color: var(--accent);
+  }
+}
+
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+.progress-stripes {
+  background-image: linear-gradient(115deg, rgba(255, 255, 255, 0.34) 0 8px, transparent 8px 14px);
+  background-size: 28px 100%;
+  animation: stripe 0.8s linear infinite;
+}
