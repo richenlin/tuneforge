@@ -26,7 +26,19 @@ fn mime_of(cover: &CoverArt) -> MimeType {
 }
 
 /// 嵌入或替换封面（`None` 等于删除全部封面）。
+///
+/// 用默认标签选项；写入 MP3/WAV/AIFF 时请改用 [`set_cover_with`]，
+/// 否则会按 lofty 默认把已有标签改写成 ID3v2.4（老播放器兼容性变差）。
 pub fn set_cover(path: &Path, cover: Option<&CoverArt>) -> Result<()> {
+    set_cover_with(path, cover, &crate::write::WriteOptions::default())
+}
+
+/// 嵌入或替换封面，沿用调用方的标签写入选项。
+pub fn set_cover_with(
+    path: &Path,
+    cover: Option<&CoverArt>,
+    options: &crate::write::WriteOptions,
+) -> Result<()> {
     let mut tagged = open_tagged(path)?;
     let tag_type = tagged.primary_tag_type();
     let mut tag = match tagged.tag_mut(tag_type) {
@@ -46,13 +58,15 @@ pub fn set_cover(path: &Path, cover: Option<&CoverArt>) -> Result<()> {
         let picture = Picture::new_unchecked(
             PictureType::CoverFront,
             Some(mime_of(cover)),
-            None,
+            // 必须给非空描述：ID3v2.3 里空描述会被写成 UTF-16 空串（无 BOM），
+            // lofty 自己都读不回来（"UTF-16 string has an invalid byte order mark"）。
+            Some("Cover".to_string()),
             cover.data.clone(),
         );
         tag.push_picture(picture);
     }
 
-    tag.save_to_path(path, lofty::config::WriteOptions::new())
+    tag.save_to_path(path, options.to_lofty())
         .map_err(|e| TfError::Tag(format!("写入封面失败（{}）：{e}", path.display())))
 }
 

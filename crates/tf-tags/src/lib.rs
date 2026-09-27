@@ -11,7 +11,10 @@ pub mod write;
 #[cfg(test)]
 pub mod test_support;
 
-pub use cover::{cover_from_file, export_cover, read_covers, read_first_cover, remove_covers, set_cover};
+pub use cover::{
+    cover_from_file, export_cover, read_covers, read_first_cover, remove_covers, set_cover,
+    set_cover_with,
+};
 pub use read::{
     apply_tags_to_lofty, has_existing_tag, primary_tag_type, read_snapshot, read_tags,
     read_tags_and_cover, tags_from_lofty, TagSnapshot,

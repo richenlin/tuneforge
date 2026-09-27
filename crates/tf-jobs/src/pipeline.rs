@@ -13,7 +13,7 @@ use tf_core::error::{Result, TfError};
 use tf_core::limiter;
 use tf_core::model::AudioBuffer;
 use tf_media::{decode, encode, probe, EncodeSpec, FfmpegPaths, MediaProgress};
-use tf_tags::{copy_tags, set_cover, write_tags, CopyPolicy, WriteOptions};
+use tf_tags::{copy_tags, set_cover_with, write_tags, CopyPolicy, WriteOptions};
 
 use crate::plan::{ChannelMode, CoverAction, Job, JobPayload};
 use crate::queue::{JobContext, LogLevel, Reporter};
@@ -194,7 +194,7 @@ impl FfmpegPipeline {
                 &job.input,
                 target,
                 CopyPolicy::TagsAndCover,
-                &WriteOptions::default(),
+                &WriteOptions::for_output(spec.format),
             ) {
                 // §8：标签失败不影响音频完整性
                 warnings.push(format!("标签复制失败：{e}"));
@@ -326,7 +326,7 @@ impl FfmpegPipeline {
                 &job.input,
                 target,
                 CopyPolicy::TagsAndCover,
-                &WriteOptions::default(),
+                &WriteOptions::for_output(payload.spec.format),
             ) {
                 warnings.push(format!("标签复制失败：{e}"));
             }
@@ -360,12 +360,20 @@ impl FfmpegPipeline {
         copy_file(&job.input, target)?;
 
         ctx.reporter.progress(0.5, "写标签");
-        write_tags(target, &payload.tags, &WriteOptions::default())?;
+        // 目标文件是源文件副本：按扩展名推断容器，MP3/WAV/AIFF 写 ID3v2.3（老播放器兼容）。
+        let tag_options = job
+            .input
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .and_then(tf_core::model::AudioFormat::from_extension)
+            .map(WriteOptions::for_output)
+            .unwrap_or_default();
+        write_tags(target, &payload.tags, &tag_options)?;
 
         let mut warnings = Vec::new();
         match &payload.cover {
             Some(CoverAction::Set(cover)) => {
-                if let Err(e) = set_cover(target, Some(cover)) {
+                if let Err(e) = set_cover_with(target, Some(cover), &tag_options) {
                     warnings.push(format!("写入封面失败：{e}"));
                 }
             }

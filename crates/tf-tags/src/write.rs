@@ -11,6 +11,7 @@ use tf_core::error::{Result, TfError};
 use tf_core::model::Tags;
 
 use crate::read::{apply_tags_to_lofty, open_tagged, read_snapshot};
+use tf_core::model::AudioFormat;
 
 /// 写入选项。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -34,7 +35,21 @@ impl Default for WriteOptions {
 }
 
 impl WriteOptions {
-    fn to_lofty(&self) -> LoftyWriteOptions {
+    /// 按输出格式给出「最大兼容」选项。
+    ///
+    /// 使用 ID3v2 的容器（MP3 / WAV / AIFF）默认写 **ID3v2.3**：
+    /// 大量老式硬件播放器、车载机只认 ID3v2.3，遇到 ID3v2.4 标签（lofty 的默认，
+    /// 且文本帧用 UTF-8，在 v2.3 里是未定义编码）会解析失败，
+    /// 表现为“播放几秒就跳到下一首”或标签乱码。无损/新式容器不受影响。
+    pub fn for_output(format: AudioFormat) -> Self {
+        let mut options = WriteOptions::default();
+        if matches!(format, AudioFormat::Mp3 | AudioFormat::Wav | AudioFormat::Aiff) {
+            options.id3v23 = true;
+        }
+        options
+    }
+
+    pub(crate) fn to_lofty(&self) -> LoftyWriteOptions {
         let mut opts = LoftyWriteOptions::new().remove_others(self.remove_others);
         opts.use_id3v23(self.id3v23);
         opts
@@ -122,7 +137,8 @@ pub fn copy_tags(from: &Path, to: &Path, policy: CopyPolicy, options: &WriteOpti
     let mut cover_written = false;
     if policy == CopyPolicy::TagsAndCover {
         if let Some(cover) = snapshot.covers.into_iter().next() {
-            crate::cover::set_cover(to, Some(&cover))?;
+            // 必须沿用同一份 WriteOptions：否则写封面会按 lofty 默认把标签改回 ID3v2.4
+            crate::cover::set_cover_with(to, Some(&cover), options)?;
             cover_written = true;
         }
     }
@@ -219,6 +235,95 @@ mod tests {
         let none = copy_tags(&a, &b, CopyPolicy::None, &WriteOptions::default()).unwrap();
         assert_eq!(none.fields_written, 0);
         assert!(!none.warnings.is_empty());
+    }
+
+    #[test]
+    fn id3v23_flag_is_actually_written_to_disk() {
+        use tf_core::model::AudioFormat;
+        let dir = tempfile::tempdir().unwrap();
+        let mut tags = Tags::default();
+        tags.title = Some("黄昏".into());
+        tags.artist = Some("周传雄".into());
+
+        // 最大兼容（for_output）：ID3 容器写 v2.3，且中文标题能读回来
+        let compat = write_minimal_wav(&dir.path().join("compat.wav"), 8000, 1, 800);
+        write_tags(&compat, &tags, &WriteOptions::for_output(AudioFormat::Wav)).unwrap();
+        assert_eq!(id3_major_version(&std::fs::read(&compat).unwrap()), Some(3));
+        assert_eq!(crate::read_tags(&compat).unwrap().title.as_deref(), Some("黄昏"));
+
+        // lofty 默认（v2.4）仍然是 v4，证明差异确实来自选项
+        let plain = write_minimal_wav(&dir.path().join("plain.wav"), 8000, 1, 800);
+        write_tags(&plain, &tags, &WriteOptions::default()).unwrap();
+        assert_eq!(id3_major_version(&std::fs::read(&plain).unwrap()), Some(4));
+
+        // 真实流程：源容器里已有 v2.4 标签（ffmpeg 写的就是 v2.4），
+        // 再用最大兼容选项改写——必须降级为 v2.3 且字段不丢
+        write_tags(&plain, &tags, &WriteOptions::for_output(AudioFormat::Wav)).unwrap();
+        assert_eq!(id3_major_version(&std::fs::read(&plain).unwrap()), Some(3));
+        assert_eq!(crate::read_tags(&plain).unwrap().artist.as_deref(), Some("周传雄"));
+    }
+
+    #[test]
+    fn id3_containers_default_to_v23_for_old_players() {
+        use tf_core::model::AudioFormat;
+        for format in [AudioFormat::Mp3, AudioFormat::Wav, AudioFormat::Aiff] {
+            let options = WriteOptions::for_output(format);
+            assert!(options.id3v23, "{format:?} 应写 ID3v2.3");
+            assert!(options.keep_cover);
+            assert!(options.remove_others);
+        }
+        assert!(!WriteOptions::for_output(AudioFormat::Flac).id3v23);
+        assert!(!WriteOptions::for_output(AudioFormat::Alac).id3v23);
+    }
+
+    #[test]
+    fn with_cover_keeps_the_same_tag_options() {
+        use crate::test_support::write_minimal_wav;
+        let dir = tempfile::tempdir().unwrap();
+        let from = write_minimal_wav(&dir.path().join("from.wav"), 8000, 1, 800);
+        let to = write_minimal_wav(&dir.path().join("to.wav"), 8000, 1, 800);
+        let tags = Tags {
+            title: Some("黄昏".into()),
+            artist: Some("周传雄".into()),
+            ..Tags::default()
+        };
+        write_tags(&from, &tags, &WriteOptions::for_output(AudioFormat::Wav)).unwrap();
+        let cover = tf_core::model::CoverArt::new("image/png", vec![0x89, 0x50, 0x4E, 0x47, 1, 2, 3, 4]);
+        crate::cover::set_cover_with(&from, Some(&cover), &WriteOptions::for_output(AudioFormat::Wav))
+            .unwrap();
+        assert_eq!(id3_major_version(&std::fs::read(&from).unwrap()), Some(3));
+        // ID3v2.3 + 中文标题必须能读回来（v2.3 里非 Latin-1 文本走 UTF-16）
+        assert_eq!(crate::read_tags(&from).unwrap().title.as_deref(), Some("黄昏"));
+
+        let report = copy_tags(
+            &from,
+            &to,
+            CopyPolicy::TagsAndCover,
+            &WriteOptions::for_output(AudioFormat::Wav),
+        )
+        .unwrap();
+        assert!(report.cover_written);
+        // 写封面这一步不能把标签改回 ID3v2.4
+        let bytes = std::fs::read(&to).unwrap();
+        assert_eq!(id3_major_version(&bytes), Some(3), "copy_tags 写封面后应为 ID3v2.3");
+        assert_eq!(crate::read_tags(&to).unwrap().artist.as_deref(), Some("周传雄"));
+        assert_eq!(
+            crate::read_first_cover(&to).unwrap().map(|c| c.data),
+            Some(vec![0x89, 0x50, 0x4E, 0x47, 1, 2, 3, 4])
+        );
+    }
+
+    /// 找出文件里 ID3v2 标签的主版本号（跳过 RIFF 的 `ID3 ` chunk 标识）。
+    fn id3_major_version(bytes: &[u8]) -> Option<u8> {
+        for index in 0..bytes.len().saturating_sub(5) {
+            if &bytes[index..index + 3] == b"ID3"
+                && bytes[index + 4] == 0
+                && matches!(bytes[index + 3], 3 | 4)
+            {
+                return Some(bytes[index + 3]);
+            }
+        }
+        None
     }
 
     #[test]
